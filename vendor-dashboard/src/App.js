@@ -11,6 +11,7 @@ function App() {
   // Fetch orders from API
   const fetchOrders = async () => {
     try {
+      // connecting to your Python Backend
       const response = await axios.get('http://localhost:8000/queue');
       setOrders(response.data);
       setError(null);
@@ -22,12 +23,14 @@ function App() {
     }
   };
 
-  // Mark order as complete
+  // Mark order as complete (Ready for Pickup)
   const completeOrder = async (orderId) => {
     setCompletingOrders(prev => new Set([...prev, orderId]));
 
     try {
-      await axios.post(`http://localhost:8000/complete/${orderId}`);
+      // FIXED: Updated to match your new main.py endpoint
+      await axios.post(`http://localhost:8000/update_status/${orderId}?status=ready`);
+
       // Refresh orders after completion
       await fetchOrders();
     } catch (err) {
@@ -52,14 +55,14 @@ function App() {
   // Get status color
   const getStatusColor = (status) => {
     switch (status?.toLowerCase()) {
-      case 'pending':
-        return 'status-pending';
+      case 'ordered':
+        return 'status-pending'; // Red/Orange
       case 'preparing':
-        return 'status-preparing';
+        return 'status-preparing'; // Blue
       case 'ready':
-        return 'status-ready';
-      case 'completed':
-        return 'status-completed';
+        return 'status-completed'; // Green
+      case 'collected':
+        return 'status-collected'; // Gray
       default:
         return 'status-pending';
     }
@@ -67,7 +70,7 @@ function App() {
 
   // Format time display
   const formatTime = (minutes) => {
-    if (!minutes) return 'N/A';
+    if (!minutes) return 'Calculating...';
     return `${minutes} min`;
   };
 
@@ -93,7 +96,7 @@ function App() {
           <div className="stats">
             <div className="stat-item">
               <span className="stat-label">Active Orders</span>
-              <span className="stat-value">{orders.filter(o => o.status !== 'completed').length}</span>
+              <span className="stat-value">{orders.filter(o => o.status !== 'collected').length}</span>
             </div>
             <div className="stat-item">
               <span className="stat-label">Current Time</span>
@@ -137,17 +140,16 @@ function App() {
             {orders.map((order) => (
               <div
                 key={order.id}
-                className={`order-card ${getStatusColor(order.status)} ${completingOrders.has(order.id) ? 'completing' : ''
-                  }`}
+                className={`order-card ${getStatusColor(order.status)} ${completingOrders.has(order.id) ? 'completing' : ''}`}
               >
                 {/* Order Header */}
                 <div className="order-header">
                   <div className="order-id">
                     <span className="label">Order</span>
-                    <span className="value">#{order.id}</span>
+                    <span className="value">#{order.id.slice(-4).toUpperCase()}</span>
                   </div>
                   <div className={`status-badge ${getStatusColor(order.status)}`}>
-                    {order.status || 'Pending'}
+                    {order.status || 'Ordered'}
                   </div>
                 </div>
 
@@ -155,48 +157,48 @@ function App() {
                 <div className="order-body">
                   <div className="student-info">
                     <span className="icon">👤</span>
-                    <span className="student-id">Student ID: {order.student_id}</span>
+                    <span className="student-id">Student: {order.student_id}</span>
                   </div>
 
-                  <div className="item-info">
-                    <div className="item-name">{order.item}</div>
-                    <div className="item-qty">
-                      <span className="qty-badge">Qty: {order.qty}</span>
-                    </div>
+                  {/* FIXED: Loop through items list */}
+                  <div className="items-list" style={{ margin: '10px 0' }}>
+                    {order.items && order.items.map((item, idx) => (
+                      <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '4px', padding: '4px', background: 'rgba(255,255,255,0.05)', borderRadius: '4px' }}>
+                        <span style={{ fontWeight: 'bold' }}>{item.name}</span>
+                        <span style={{ background: '#2563eb', padding: '0 6px', borderRadius: '4px', fontSize: '0.8em' }}>x{item.qty}</span>
+                      </div>
+                    ))}
                   </div>
 
+                  {/* FIXED: Use 'eta_minutes' for AI Time */}
                   <div className="time-info">
                     <span className="icon">⏱️</span>
                     <span className="time-label">Est. Time:</span>
-                    <span className="time-value">{formatTime(order.predicted_time)}</span>
+                    <span className="time-value">{formatTime(order.eta_minutes)}</span>
                   </div>
                 </div>
 
                 {/* Order Actions */}
                 <div className="order-footer">
-                  {order.status?.toLowerCase() !== 'completed' && (
+                  {order.status !== 'ready' && order.status !== 'collected' ? (
                     <button
                       className="complete-btn"
                       onClick={() => completeOrder(order.id)}
                       disabled={completingOrders.has(order.id)}
                     >
                       {completingOrders.has(order.id) ? (
-                        <>
-                          <span className="btn-spinner"></span>
-                          Processing...
-                        </>
+                        <>Processing...</>
                       ) : (
                         <>
                           <span className="btn-icon">✓</span>
-                          Mark as Complete
+                          Mark Ready
                         </>
                       )}
                     </button>
-                  )}
-                  {order.status?.toLowerCase() === 'completed' && (
+                  ) : (
                     <div className="completed-badge">
                       <span className="check-icon">✓</span>
-                      Completed
+                      Ready for Pickup
                     </div>
                   )}
                 </div>
