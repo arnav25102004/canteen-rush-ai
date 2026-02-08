@@ -210,7 +210,7 @@ function App() {
 
       {/* Footer */}
       <footer className="footer">
-        <p>© 2026 Canteen Rush AI | University Cafeteria Management System</p>
+        <p>© 2026 Canteen Rush AI | Christ University Canteen Management System 2026</p>
       </footer>
     </div>
   );
