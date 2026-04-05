@@ -1,7 +1,11 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
+import { validateBody } from '../utils/helpers';
+import { OrderStatus } from '@prisma/client';
 import { z } from 'zod';
+
+const ACTIVE_STATUSES = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
 
 const canteenSchema = z.object({
   name: z.string().min(2),
@@ -26,7 +30,7 @@ export async function listCanteens(req: Request, res: Response) {
     },
     include: {
       vendor: { select: { name: true, email: true } },
-      _count: { select: { orders: { where: { status: { in: ['CONFIRMED', 'ACCEPTED', 'PREPARING'] } } } } },
+      _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
     },
     orderBy: { name: 'asc' },
   });
@@ -39,7 +43,7 @@ export async function getCanteen(req: Request, res: Response) {
     where: { id },
     include: {
       vendor: { select: { name: true, email: true } },
-      _count: { select: { orders: { where: { status: { in: ['CONFIRMED', 'ACCEPTED', 'PREPARING'] } } } } },
+      _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
     },
   });
   if (!canteen) return res.status(404).json({ error: 'Canteen not found' });
@@ -48,35 +52,34 @@ export async function getCanteen(req: Request, res: Response) {
 
 export async function getCanteenLiveStats(req: Request, res: Response) {
   const { id } = req.params;
-  const activeOrders = await prisma.order.count({
-    where: { canteenId: id, status: { in: ['CONFIRMED', 'ACCEPTED', 'PREPARING'] } },
-  });
-  const canteen = await prisma.canteen.findUnique({
-    where: { id },
-    select: { avgPrepTime: true },
-  });
+
+  const [activeOrders, canteen] = await Promise.all([
+    prisma.order.count({ where: { canteenId: id, status: { in: ACTIVE_STATUSES } } }),
+    prisma.canteen.findUnique({ where: { id }, select: { avgPrepTime: true } }),
+  ]);
+
   return res.json({
     canteenId: id,
     activeOrders,
-    estimatedWaitMinutes: Math.ceil(activeOrders * (canteen?.avgPrepTime || 15) / 3),
+    estimatedWaitMinutes: Math.ceil((activeOrders * (canteen?.avgPrepTime ?? 15)) / 3),
     queueCount: activeOrders,
   });
 }
 
 export async function createCanteen(req: AuthRequest, res: Response) {
-  const parse = canteenSchema.safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  const v = validateBody(canteenSchema, req.body, res);
+  if (!v.success) return;
 
-  const canteen = await prisma.canteen.create({ data: parse.data });
+  const canteen = await prisma.canteen.create({ data: v.data });
   return res.status(201).json({ canteen });
 }
 
 export async function updateCanteen(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const parse = canteenSchema.partial().safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  const v = validateBody(canteenSchema.partial(), req.body, res);
+  if (!v.success) return;
 
-  const canteen = await prisma.canteen.update({ where: { id }, data: parse.data });
+  const canteen = await prisma.canteen.update({ where: { id }, data: v.data });
   return res.json({ canteen });
 }
 
