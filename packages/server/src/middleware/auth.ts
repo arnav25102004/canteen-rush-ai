@@ -1,0 +1,64 @@
+import { Request, Response, NextFunction } from 'express';
+import { verifyFirebaseToken } from '../config/firebase';
+import { prisma } from '../config/database';
+import { UserRole } from '@prisma/client';
+
+export interface AuthRequest extends Request {
+  user?: {
+    id: string;
+    firebaseUid: string;
+    email: string;
+    name: string;
+    role: UserRole;
+    canteenId?: string;
+  };
+  io?: any;
+}
+
+export async function authenticate(req: AuthRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    return res.status(401).json({ error: 'No token provided' });
+  }
+
+  const token = authHeader.slice(7);
+  const decoded = await verifyFirebaseToken(token);
+
+  if (!decoded) {
+    return res.status(401).json({ error: 'Invalid or expired token' });
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { firebaseUid: decoded.uid },
+    include: { vendorCanteen: { select: { id: true } } },
+  });
+
+  if (!user) {
+    return res.status(401).json({ error: 'User not registered. Please register first.' });
+  }
+
+  req.user = {
+    id: user.id,
+    firebaseUid: user.firebaseUid,
+    email: user.email,
+    name: user.name,
+    role: user.role,
+    canteenId: user.vendorCanteen?.id,
+  };
+
+  next();
+}
+
+export function requireRole(...roles: UserRole[]) {
+  return (req: AuthRequest, res: Response, next: NextFunction) => {
+    if (!req.user) return res.status(401).json({ error: 'Unauthorized' });
+    if (!roles.includes(req.user.role)) {
+      return res.status(403).json({ error: 'Forbidden: insufficient permissions' });
+    }
+    next();
+  };
+}
+
+export const requireVendor = requireRole(UserRole.VENDOR, UserRole.ADMIN);
+export const requireAdmin = requireRole(UserRole.ADMIN);
+export const requireStudent = requireRole(UserRole.STUDENT, UserRole.ADMIN);
