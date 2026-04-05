@@ -1,0 +1,23 @@
+{
+  "name": "christ-canteen",
+  "version": "1.0.0",
+  "private": true,
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev --workspace=packages/server",
+    "dev:web": "npm run dev --workspace=apps/web",
+    "dev:mobile": "npm run start --workspace=apps/mobile",
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "build:server": "npm run build --workspace=packages/server",
+    "build:web": "npm run build --workspace=apps/web",
+    "db:migrate": "npm run migrate --workspace=packages/server",
+    "db:seed": "npm run seed --workspace=packages/server",
+    "db:studio": "npm run studio --workspace=packages/server"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
