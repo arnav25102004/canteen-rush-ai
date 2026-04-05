@@ -1,0 +1,345 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================
+// AUTH & USERS
+// ============================================================
+
+enum UserRole {
+  STUDENT
+  VENDOR
+  ADMIN
+}
+
+model User {
+  id             String    @id @default(uuid())
+  firebaseUid    String    @unique @map("firebase_uid")
+  email          String    @unique
+  name           String
+  phone          String?
+  role           UserRole  @default(STUDENT)
+  avatarUrl      String?   @map("avatar_url")
+  campus         String?   // "Bannerghatta", "Kengeri", "Central"
+  dietPreference String?   @map("diet_preference") // "veg", "nonveg", "jain", "noegg"
+  fcmToken       String?   @map("fcm_token")
+  createdAt      DateTime  @default(now()) @map("created_at")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+
+  wallet        Wallet?
+  orders        Order[]
+  ratings       Rating[]
+  favorites     Favorite[]
+  vendorCanteen Canteen?       @relation("VendorCanteen")
+  notifications Notification[]
+
+  @@map("users")
+}
+
+// ============================================================
+// CANTEENS
+// ============================================================
+
+model Canteen {
+  id           String   @id @default(uuid())
+  name         String   // "Mingoes", "Christ Bakery", "Punjabi Bites", "Michael", "Freshetaria"
+  description  String?
+  campus       String   // "Bannerghatta Road", "Kengeri", "Central City"
+  location     String?  // "Block 1, Ground Floor"
+  imageUrl     String?  @map("image_url")
+  bannerUrl    String?  @map("banner_url")
+  isActive     Boolean  @default(true) @map("is_active")
+  openingTime  String   @map("opening_time") // "07:30"
+  closingTime  String   @map("closing_time") // "20:00"
+  contactPhone String?  @map("contact_phone")
+  avgPrepTime  Int      @default(15) @map("avg_prep_time")
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  vendor        User?          @relation("VendorCanteen", fields: [vendorId], references: [id])
+  vendorId      String?        @unique @map("vendor_id")
+  categories    MenuCategory[]
+  menuItems     MenuItem[]
+  pickupSlots   PickupSlot[]
+  orders        Order[]
+  announcements Announcement[]
+
+  @@map("canteens")
+}
+
+// ============================================================
+// MENU SYSTEM
+// ============================================================
+
+model MenuCategory {
+  id            String   @id @default(uuid())
+  canteenId     String   @map("canteen_id")
+  name          String   // "Breakfast", "Lunch", "Snacks", "Beverages"
+  description   String?
+  sortOrder     Int      @default(0) @map("sort_order")
+  isActive      Boolean  @default(true) @map("is_active")
+  availableFrom String?  @map("available_from") // "07:30"
+  availableTo   String?  @map("available_to")   // "10:30"
+  createdAt     DateTime @default(now()) @map("created_at")
+
+  canteen Canteen    @relation(fields: [canteenId], references: [id], onDelete: Cascade)
+  items   MenuItem[]
+
+  @@map("menu_categories")
+}
+
+model MenuItem {
+  id              String   @id @default(uuid())
+  canteenId       String   @map("canteen_id")
+  categoryId      String   @map("category_id")
+  name            String
+  description     String?
+  price           Decimal  @db.Decimal(10, 2)
+  imageUrl        String?  @map("image_url")
+  isVeg           Boolean  @default(true) @map("is_veg")
+  isJain          Boolean  @default(false) @map("is_jain")
+  containsEgg     Boolean  @default(false) @map("contains_egg")
+  prepTimeMinutes Int      @default(10) @map("prep_time_minutes")
+  isAvailable     Boolean  @default(true) @map("is_available")
+  isPopular       Boolean  @default(false) @map("is_popular")
+  isNew           Boolean  @default(false) @map("is_new")
+  sortOrder       Int      @default(0) @map("sort_order")
+  totalOrders     Int      @default(0) @map("total_orders")
+  avgRating       Decimal  @default(0) @db.Decimal(2, 1) @map("avg_rating")
+  totalRatings    Int      @default(0) @map("total_ratings")
+  customizations  Json?    @default("[]")
+  createdAt       DateTime @default(now()) @map("created_at")
+  updatedAt       DateTime @updatedAt @map("updated_at")
+
+  canteen    Canteen      @relation(fields: [canteenId], references: [id], onDelete: Cascade)
+  category   MenuCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  orderItems OrderItem[]
+  ratings    Rating[]
+  favorites  Favorite[]
+
+  @@index([canteenId, categoryId])
+  @@index([canteenId, isAvailable])
+  @@map("menu_items")
+}
+
+// ============================================================
+// PICKUP SLOT SYSTEM
+// ============================================================
+
+model PickupSlot {
+  id             String   @id @default(uuid())
+  canteenId      String   @map("canteen_id")
+  date           DateTime @db.Date
+  startTime      String   @map("start_time") // "09:00"
+  endTime        String   @map("end_time")   // "09:15"
+  maxOrders      Int      @map("max_orders")
+  currentOrders  Int      @default(0) @map("current_orders")
+  walkInReserved Int      @default(5) @map("walk_in_reserved")
+  isOpen         Boolean  @default(true) @map("is_open")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  canteen Canteen @relation(fields: [canteenId], references: [id], onDelete: Cascade)
+  orders  Order[]
+
+  @@unique([canteenId, date, startTime])
+  @@index([canteenId, date])
+  @@map("pickup_slots")
+}
+
+// ============================================================
+// ORDERS
+// ============================================================
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  ACCEPTED
+  PREPARING
+  READY
+  PICKED_UP
+  CANCELLED
+}
+
+enum PaymentStatus {
+  PENDING
+  PAID
+  REFUNDED
+  FAILED
+}
+
+enum PaymentMethod {
+  WALLET
+  UPI
+  CARD
+  CASH
+}
+
+model Order {
+  id                  String         @id @default(uuid())
+  orderNumber         String         @unique @map("order_number")
+  userId              String         @map("user_id")
+  canteenId           String         @map("canteen_id")
+  slotId              String?        @map("slot_id")
+  status              OrderStatus    @default(PENDING)
+  paymentStatus       PaymentStatus  @default(PENDING) @map("payment_status")
+  paymentMethod       PaymentMethod? @map("payment_method")
+  subtotal            Decimal        @db.Decimal(10, 2)
+  platformFee         Decimal        @default(0) @db.Decimal(10, 2) @map("platform_fee")
+  totalAmount         Decimal        @db.Decimal(10, 2) @map("total_amount")
+  qrCode              String?        @map("qr_code")
+  qrScanned           Boolean        @default(false) @map("qr_scanned")
+  specialInstructions String?        @map("special_instructions")
+  estimatedReadyAt    DateTime?      @map("estimated_ready_at")
+  actualReadyAt       DateTime?      @map("actual_ready_at")
+  pickedUpAt          DateTime?      @map("picked_up_at")
+  cancelledAt         DateTime?      @map("cancelled_at")
+  cancelReason        String?        @map("cancel_reason")
+  razorpayOrderId     String?        @map("razorpay_order_id")
+  razorpayPaymentId   String?        @map("razorpay_payment_id")
+  createdAt           DateTime       @default(now()) @map("created_at")
+  updatedAt           DateTime       @updatedAt @map("updated_at")
+
+  user              User               @relation(fields: [userId], references: [id])
+  canteen           Canteen            @relation(fields: [canteenId], references: [id])
+  slot              PickupSlot?        @relation(fields: [slotId], references: [id])
+  items             OrderItem[]
+  rating            Rating?
+  walletTransaction WalletTransaction?
+
+  @@index([userId, createdAt])
+  @@index([canteenId, status])
+  @@index([canteenId, slotId])
+  @@index([qrCode])
+  @@map("orders")
+}
+
+model OrderItem {
+  id             String  @id @default(uuid())
+  orderId        String  @map("order_id")
+  menuItemId     String  @map("menu_item_id")
+  quantity       Int
+  unitPrice      Decimal @db.Decimal(10, 2) @map("unit_price")
+  totalPrice     Decimal @db.Decimal(10, 2) @map("total_price")
+  customizations Json?   @default("{}")
+  notes          String?
+
+  order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@map("order_items")
+}
+
+// ============================================================
+// WALLET & PAYMENTS
+// ============================================================
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique @map("user_id")
+  balance   Decimal  @default(0) @db.Decimal(10, 2)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user         User               @relation(fields: [userId], references: [id])
+  transactions WalletTransaction[]
+
+  @@map("wallets")
+}
+
+enum TransactionType {
+  RECHARGE
+  DEBIT
+  REFUND
+}
+
+model WalletTransaction {
+  id                String          @id @default(uuid())
+  walletId          String          @map("wallet_id")
+  orderId           String?         @unique @map("order_id")
+  type              TransactionType
+  amount            Decimal         @db.Decimal(10, 2)
+  balanceAfter      Decimal         @db.Decimal(10, 2) @map("balance_after")
+  description       String?
+  razorpayPaymentId String?         @map("razorpay_payment_id")
+  createdAt         DateTime        @default(now()) @map("created_at")
+
+  wallet Wallet @relation(fields: [walletId], references: [id])
+  order  Order? @relation(fields: [orderId], references: [id])
+
+  @@index([walletId, createdAt])
+  @@map("wallet_transactions")
+}
+
+// ============================================================
+// RATINGS & FAVORITES
+// ============================================================
+
+model Rating {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  orderId    String   @unique @map("order_id")
+  menuItemId String   @map("menu_item_id")
+  rating     Int      // 1-5
+  review     String?
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user     User     @relation(fields: [userId], references: [id])
+  order    Order    @relation(fields: [orderId], references: [id])
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@unique([userId, orderId, menuItemId])
+  @@map("ratings")
+}
+
+model Favorite {
+  id         String   @id @default(uuid())
+  userId     String   @map("user_id")
+  menuItemId String   @map("menu_item_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user     User     @relation(fields: [userId], references: [id])
+  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+
+  @@unique([userId, menuItemId])
+  @@map("favorites")
+}
+
+// ============================================================
+// NOTIFICATIONS & ANNOUNCEMENTS
+// ============================================================
+
+model Notification {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  title     String
+  body      String
+  type      String   // "order_update", "promotion", "announcement"
+  data      Json?    @default("{}")
+  isRead    Boolean  @default(false) @map("is_read")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User @relation(fields: [userId], references: [id])
+
+  @@index([userId, isRead])
+  @@map("notifications")
+}
+
+model Announcement {
+  id        String    @id @default(uuid())
+  canteenId String?   @map("canteen_id") // null = broadcast to all
+  title     String
+  body      String
+  isActive  Boolean   @default(true) @map("is_active")
+  startsAt  DateTime  @map("starts_at")
+  endsAt    DateTime? @map("ends_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+
+  canteen Canteen? @relation(fields: [canteenId], references: [id])
+
+  @@map("announcements")
+}
