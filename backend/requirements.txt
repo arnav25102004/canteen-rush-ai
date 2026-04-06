@@ -1,7 +1,9 @@
 fastapi
 uvicorn
-sqlalchemy
+motor
 pydantic
-uuid
 joblib
 requests
+passlib[bcrypt]
+bcrypt==4.0.1
+python-multipart

@@ -11,3 +11,5 @@ database = client.canteen_rush
 # 3. Collections (The "Tables")
 menu_collection = database.get_collection("menu")
 order_collection = database.get_collection("orders")
+user_collection = database.get_collection("users")
+wallet_collection = database.get_collection("wallets")
