@@ -2,7 +2,8 @@ import jwt from 'jsonwebtoken';
 import QRCode from 'qrcode';
 
 const QR_SECRET = process.env.JWT_SECRET || 'christ-canteen-qr-secret';
-const QR_EXPIRY = process.env.JWT_EXPIRES_IN || '12h';
+import type { SignOptions } from 'jsonwebtoken';
+const QR_EXPIRY: SignOptions['expiresIn'] = '12h';
 
 export interface QRPayload {
   orderId: string;

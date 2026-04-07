@@ -94,7 +94,16 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
         platformFee: 0,
         totalAmount,
         specialInstructions,
-        items: { create: orderItems },
+        items: {
+          create: orderItems.map((oi) => ({
+            menuItem: { connect: { id: oi.menuItemId } },
+            quantity: oi.quantity,
+            unitPrice: oi.unitPrice,
+            totalPrice: oi.totalPrice,
+            customizations: oi.customizations as object,
+            notes: oi.notes,
+          })),
+        },
       },
       include: {
         items: { include: { menuItem: { select: { name: true } } } },
@@ -157,7 +166,8 @@ export async function cancelOrder(
 
   if (!order) throw new Error('Order not found');
 
-  if (cancelledBy === 'student' && ![OrderStatus.PENDING, OrderStatus.CONFIRMED].includes(order.status)) {
+  const cancellableStatuses: OrderStatus[] = [OrderStatus.PENDING, OrderStatus.CONFIRMED];
+  if (cancelledBy === 'student' && !cancellableStatuses.includes(order.status)) {
     throw new Error('Cannot cancel order that is already being prepared');
   }
 
