@@ -51,6 +51,9 @@ export default function LoginScreen() {
     >
       <Text style={styles.logo}>ChristEats</Text>
       <Text style={styles.subtitle}>Christ University Virtual Canteen</Text>
+      {mode === 'register' && (
+        <Text style={styles.notice}>Only @christuniversity.in emails allowed</Text>
+      )}
 
       <View style={styles.toggle}>
         <TouchableOpacity
@@ -83,7 +86,7 @@ export default function LoginScreen() {
         )}
         <TextInput
           style={styles.input}
-          placeholder="Email"
+          placeholder="Email (yourname@christuniversity.in)"
           value={email}
           onChangeText={setEmail}
           keyboardType="email-address"
@@ -118,6 +121,7 @@ const styles = StyleSheet.create({
   toggleActive: { backgroundColor: '#e94560' },
   toggleText: { color: '#ffffff60', fontWeight: '600' },
   toggleTextActive: { color: '#fff' },
+  notice: { color: '#f59e0b', textAlign: 'center', fontSize: 12, marginBottom: 16 },
   form: { gap: 12 },
   input: { backgroundColor: '#ffffff15', color: '#fff', borderRadius: 12, padding: 16, fontSize: 16 },
   btn: { backgroundColor: '#e94560', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 8 },
