@@ -3,17 +3,22 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, Alert, ActivityIn
 import { useRouter } from 'expo-router';
 import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
+import { useAuthStore } from '../store/authStore';
 
 interface Slot { id: string; startTime: string; endTime: string; available: number; }
+
+type PaymentMethod = 'WALLET' | 'RAZORPAY';
 
 export default function CheckoutScreen() {
   const router = useRouter();
   const { canteenId, canteenName, items, total, clear } = useCartStore();
+  const { user } = useAuthStore();
   const [slots, setSlots] = useState<Slot[]>([]);
   const [selectedSlot, setSelectedSlot] = useState<string | null>(null);
   const [wallet, setWallet] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [placing, setPlacing] = useState(false);
+  const [paymentMethod, setPaymentMethod] = useState<PaymentMethod>('WALLET');
 
   useEffect(() => {
     Promise.all([
@@ -28,13 +33,13 @@ export default function CheckoutScreen() {
     ]).finally(() => setLoading(false));
   }, [canteenId]);
 
-  async function placeOrder() {
+  async function placeWithWallet() {
     if (!canteenId) return;
     const balance = Number(wallet?.balance || 0);
     const orderTotal = total();
 
     if (balance < orderTotal) {
-      Alert.alert('Insufficient Balance', `You need ₹${(orderTotal - balance).toFixed(0)} more. Please recharge your wallet.`, [
+      Alert.alert('Insufficient Balance', `You need ₹${(orderTotal - balance).toFixed(0)} more.`, [
         { text: 'Cancel' },
         { text: 'Recharge', onPress: () => router.push('/(tabs)/wallet') },
       ]);
@@ -58,11 +63,47 @@ export default function CheckoutScreen() {
     }
   }
 
+  async function placeWithRazorpay() {
+    if (!canteenId) return;
+    setPlacing(true);
+    try {
+      const { data } = await api.post('/payment/create-order', {
+        amount: total(),
+        receipt: `order_${Date.now()}`,
+      });
+      const baseUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+      router.push({
+        pathname: '/payment',
+        params: {
+          razorpayOrderId: data.orderId,
+          amount: String(data.amount),
+          keyId: data.keyId,
+          userName: user?.name || '',
+          userEmail: user?.email || '',
+          cartJson: JSON.stringify(items.map(i => ({ menuItemId: i.menuItemId, quantity: i.quantity }))),
+          canteenId: canteenId,
+          slotId: selectedSlot || '',
+          baseUrl,
+        },
+      });
+    } catch (err: any) {
+      Alert.alert('Payment Error', err.response?.data?.detail || 'Could not initiate payment');
+    } finally {
+      setPlacing(false);
+    }
+  }
+
+  function handlePlaceOrder() {
+    if (paymentMethod === 'RAZORPAY') placeWithRazorpay();
+    else placeWithWallet();
+  }
+
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#e94560" /></View>;
 
   const orderTotal = total();
   const balance = Number(wallet?.balance || 0);
-  const hasEnough = balance >= orderTotal;
+  const hasEnoughWallet = balance >= orderTotal;
+  const canProceed = paymentMethod === 'RAZORPAY' || hasEnoughWallet;
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: '#f8f9fa' }} contentContainerStyle={{ padding: 16 }}>
@@ -106,26 +147,51 @@ export default function CheckoutScreen() {
         </View>
       )}
 
-      {/* Wallet Payment */}
+      {/* Payment Method */}
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>Payment</Text>
-        <View style={styles.walletRow}>
-          <Text style={styles.walletLabel}>Wallet Balance</Text>
-          <Text style={[styles.walletBalance, !hasEnough && { color: '#ef4444' }]}>₹{balance.toFixed(2)}</Text>
-        </View>
-        {!hasEnough && (
-          <Text style={styles.insufficientText}>
-            Need ₹{(orderTotal - balance).toFixed(0)} more —{' '}
-            <Text style={{ color: '#e94560', fontWeight: '600' }} onPress={() => router.push('/(tabs)/wallet')}>
-              Recharge
+        <Text style={styles.sectionTitle}>Payment Method</Text>
+
+        {/* Wallet option */}
+        <TouchableOpacity style={[styles.payOption, paymentMethod === 'WALLET' && styles.payOptionActive]}
+          onPress={() => setPaymentMethod('WALLET')}>
+          <View style={[styles.radio, paymentMethod === 'WALLET' && styles.radioActive]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.payOptionTitle}>Wallet</Text>
+            <Text style={[styles.walletBalance, !hasEnoughWallet && paymentMethod === 'WALLET' && { color: '#ef4444' }]}>
+              Balance: ₹{balance.toFixed(2)}
             </Text>
-          </Text>
-        )}
+            {paymentMethod === 'WALLET' && !hasEnoughWallet && (
+              <Text style={styles.insufficientText}>
+                Need ₹{(orderTotal - balance).toFixed(0)} more —{' '}
+                <Text style={{ color: '#e94560', fontWeight: '600' }} onPress={() => router.push('/(tabs)/wallet')}>
+                  Recharge
+                </Text>
+              </Text>
+            )}
+          </View>
+        </TouchableOpacity>
+
+        {/* Razorpay option */}
+        <TouchableOpacity style={[styles.payOption, paymentMethod === 'RAZORPAY' && styles.payOptionActive]}
+          onPress={() => setPaymentMethod('RAZORPAY')}>
+          <View style={[styles.radio, paymentMethod === 'RAZORPAY' && styles.radioActive]} />
+          <View style={{ flex: 1 }}>
+            <Text style={styles.payOptionTitle}>Pay Online</Text>
+            <Text style={styles.payOptionSub}>UPI · Cards · Net Banking via Razorpay</Text>
+          </View>
+          <Text style={styles.razorpayBadge}>razorpay</Text>
+        </TouchableOpacity>
       </View>
 
-      <TouchableOpacity style={[styles.placeBtn, (!hasEnough || placing) && styles.placeBtnDisabled]}
-        onPress={placeOrder} disabled={!hasEnough || placing}>
-        {placing ? <ActivityIndicator color="#fff" /> : <Text style={styles.placeBtnText}>Place Order ₹{orderTotal.toFixed(0)}</Text>}
+      <TouchableOpacity
+        style={[styles.placeBtn, (!canProceed || placing) && styles.placeBtnDisabled]}
+        onPress={handlePlaceOrder}
+        disabled={!canProceed || placing}>
+        {placing
+          ? <ActivityIndicator color="#fff" />
+          : <Text style={styles.placeBtnText}>
+              {paymentMethod === 'RAZORPAY' ? `Pay ₹${orderTotal.toFixed(0)} Online` : `Place Order ₹${orderTotal.toFixed(0)}`}
+            </Text>}
       </TouchableOpacity>
     </ScrollView>
   );
@@ -148,10 +214,15 @@ const styles = StyleSheet.create({
   slotText: { fontSize: 14, fontWeight: '600', color: '#333' },
   slotTextActive: { color: '#fff' },
   slotAvail: { fontSize: 12, color: '#888' },
-  walletRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  walletLabel: { fontSize: 14, color: '#555' },
-  walletBalance: { fontSize: 20, fontWeight: 'bold', color: '#10b981' },
-  insufficientText: { fontSize: 13, color: '#ef4444', marginTop: 8 },
+  payOption: { flexDirection: 'row', alignItems: 'center', gap: 12, padding: 12, borderRadius: 10, borderWidth: 1.5, borderColor: '#e5e7eb', marginBottom: 8 },
+  payOptionActive: { borderColor: '#e94560', backgroundColor: '#fff5f7' },
+  radio: { width: 18, height: 18, borderRadius: 9, borderWidth: 2, borderColor: '#ccc' },
+  radioActive: { borderColor: '#e94560', backgroundColor: '#e94560' },
+  payOptionTitle: { fontSize: 14, fontWeight: '600', color: '#1a1a2e' },
+  payOptionSub: { fontSize: 11, color: '#888', marginTop: 2 },
+  walletBalance: { fontSize: 13, color: '#10b981', fontWeight: '600' },
+  insufficientText: { fontSize: 12, color: '#ef4444', marginTop: 4 },
+  razorpayBadge: { fontSize: 10, color: '#3395FF', fontWeight: '700', letterSpacing: 0.5 },
   placeBtn: { backgroundColor: '#e94560', borderRadius: 14, padding: 18, alignItems: 'center', marginBottom: 32 },
   placeBtnDisabled: { opacity: 0.5 },
   placeBtnText: { color: '#fff', fontWeight: '700', fontSize: 16 },
