@@ -1,45 +1,105 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, Alert, TextInput, Modal, StyleSheet, ActivityIndicator } from 'react-native';
+import * as WebBrowser from 'expo-web-browser';
 import api from '../../services/api';
+import { useAuthStore } from '../../store/authStore';
 
 const TYPE_COLOR: Record<string, string> = { RECHARGE: '#10b981', DEBIT: '#ef4444', REFUND: '#3b82f6' };
+const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
 
 export default function WalletScreen() {
+  const { user } = useAuthStore();
   const [wallet, setWallet] = useState<any>(null);
   const [transactions, setTransactions] = useState<any[]>([]);
   const [showRecharge, setShowRecharge] = useState(false);
   const [amount, setAmount] = useState('');
   const [loading, setLoading] = useState(false);
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      api.get('/wallet').then(r => setWallet(r.data.wallet)),
-      api.get('/wallet/transactions').then(r => setTransactions(r.data.transactions || [])),
-    ]);
+    loadWallet();
+    return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, []);
+
+  async function loadWallet() {
+    const [w, t] = await Promise.all([
+      api.get('/wallet').then(r => r.data.wallet),
+      api.get('/wallet/transactions').then(r => r.data.transactions || []),
+    ]);
+    setWallet(w);
+    setTransactions(t);
+  }
 
   async function recharge() {
     const n = parseFloat(amount);
     if (!n || n < 10) { Alert.alert('Minimum recharge is ₹10'); return; }
+
     setLoading(true);
     try {
-      const { data } = await api.post('/wallet/recharge', { amount: n });
-      setWallet(data.wallet);
-      setAmount('');
+      // 1. Create Razorpay order
+      const { data } = await api.post('/payment/create-order', {
+        amount: n,
+        receipt: `wallet_${Date.now()}`,
+      });
+
+      const razorpayOrderId = data.orderId;
       setShowRecharge(false);
-      // Refresh transactions
-      const txRes = await api.get('/wallet/transactions');
-      setTransactions(txRes.data.transactions || []);
-      Alert.alert('Success', `₹${n.toFixed(0)} added to your wallet!`);
+      setAmount('');
+
+      // 2. Open Razorpay in browser
+      const url = `${API_URL}/payment/checkout?orderId=${razorpayOrderId}&amount=${data.amount}&name=${encodeURIComponent(user?.name || 'Student')}&email=${encodeURIComponent(user?.email || '')}`;
+      await WebBrowser.openBrowserAsync(url, {
+        toolbarColor: '#1a1a2e',
+        controlsColor: '#e94560',
+      });
+
+      // 3. Poll for payment confirmation
+      setLoading(true);
+      let attempts = 0;
+      pollRef.current = setInterval(async () => {
+        attempts++;
+        try {
+          const { data: statusData } = await api.get(`/payment/status/${razorpayOrderId}`);
+          if (statusData.status === 'PAID') {
+            clearInterval(pollRef.current!);
+            // 4. Credit the wallet
+            await api.post('/wallet/recharge', { amount: n, paymentId: statusData.paymentId });
+            await loadWallet();
+            setLoading(false);
+            Alert.alert('Success', `₹${n.toFixed(0)} added to your wallet!`);
+          } else if (statusData.status === 'FAILED' || attempts > 15) {
+            clearInterval(pollRef.current!);
+            setLoading(false);
+            if (attempts > 15) Alert.alert('Timeout', 'Payment not confirmed. If money was deducted, contact support.');
+          }
+        } catch {
+          if (attempts > 15) {
+            clearInterval(pollRef.current!);
+            setLoading(false);
+          }
+        }
+      }, 1500);
+
     } catch (e: any) {
-      Alert.alert('Failed', e?.response?.data?.detail || 'Recharge failed');
-    } finally {
       setLoading(false);
+      const detail = e?.response?.data?.detail || '';
+      if (detail.includes('not configured')) {
+        Alert.alert('Razorpay not set up', 'Add your Razorpay keys to backend/.env and restart the backend.');
+      } else {
+        Alert.alert('Failed', detail || 'Could not initiate payment');
+      }
     }
   }
 
   return (
     <View style={{ flex: 1, backgroundColor: '#f8f9fa' }}>
+      {loading && (
+        <View style={styles.loadingOverlay}>
+          <ActivityIndicator size="large" color="#e94560" />
+          <Text style={styles.loadingText}>Processing payment...</Text>
+        </View>
+      )}
+
       <View style={styles.balanceCard}>
         <Text style={styles.balanceLabel}>Wallet Balance</Text>
         <Text style={styles.balance}>₹{Number(wallet?.balance || 0).toFixed(2)}</Text>
@@ -94,6 +154,8 @@ export default function WalletScreen() {
 }
 
 const styles = StyleSheet.create({
+  loadingOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: '#ffffffcc', justifyContent: 'center', alignItems: 'center', zIndex: 99 },
+  loadingText: { marginTop: 12, color: '#555', fontSize: 14 },
   balanceCard: { backgroundColor: '#1a1a2e', margin: 16, borderRadius: 20, padding: 24, alignItems: 'center' },
   balanceLabel: { color: '#ffffff80', fontSize: 14 },
   balance: { color: '#fff', fontSize: 42, fontWeight: 'bold', marginVertical: 8 },
