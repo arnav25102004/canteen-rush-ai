@@ -1,15 +1,15 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+const BASE = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
 
-const api = axios.create({ baseURL: API_URL });
+const api = axios.create({ baseURL: `${BASE}/api` });
 
-// Attach stored user_id to every request so backend can identify the caller
+// Attach stored auth token to every request
 api.interceptors.request.use(async (config) => {
-  const userId = await AsyncStorage.getItem('user_id');
-  if (userId) {
-    config.headers['x-user-id'] = userId;
+  const token = await AsyncStorage.getItem('auth_token');
+  if (token) {
+    config.headers['Authorization'] = `Bearer ${token}`;
   }
   return config;
 });
