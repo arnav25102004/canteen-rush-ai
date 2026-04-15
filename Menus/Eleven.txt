@@ -1,0 +1,52 @@
+Eleven 
+
+HOT BEVERAGES
+Coffee/Tea - 12
+Lemon Tea - 12
+
+COLD BEVERAGES
+Lemon Ice Tea - 30
+Cold Coffee - 40
+
+BREAKFAST
+Idly (2 PC) - 30
+Tatte Idly - 25
+Medu Vada (2 PC) - 30
+Veg Pulav - 50
+Puri Chole - 60
+
+LUNCH
+Rajma Rice Combo - 70
+Chole Rice Combo - 70
+Chicken Curry Combo - 100
+Veg Fried Rice / Noodles - 70
+Egg Fried Rice / Noodles - 80
+Chicken Fried Rice / Noodles - 100
+Veg Chinese Combo - 90
+Non Veg Chinese Combo - 120
+Chicken Biryani - 100
+Chicken Kabab Biryani - 100
+
+BURGERS (Classic / With Cheese)
+Veg Burger - 50 / 60
+Chicken Burger - 60 / 70
+Peri Peri Chicken Burger - 80 / 90
+Barbeque Chicken Burger - 80 / 90
+Vada Pav - 30 / 40
+
+SANDWICHES (Classic / With Cheese)
+Paneer Sandwich - 80 / 90
+Chicken Sandwich - 70 / 80
+Peri Peri Chicken Sandwich - 80 / 90
+Barbeque Chicken Sandwich - 80 / 90
+
+ROLLS (Classic / With Cheese)
+Paneer Roll - 80 / 90
+Chicken Roll - 70 / 80
+Peri Peri Chicken Roll - 80 / 90
+Barbeque Chicken Roll - 80 / 90
+
+Puffs
+Veg Puff - 20
+Egg Puff - 20
+Chicken Puff - 30

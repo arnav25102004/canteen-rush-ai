@@ -1,0 +1,68 @@
+Mingoes 
+
+HOT BEVERAGES
+Coffee/Tea - 12
+Lemon Tea/Green Tea - 12
+Hot Chocolate - 25
+
+COLD BEVERAGES
+Lemon Ice Tea - 30
+Cold Orange - 30
+Cold Coffee - 40
+Cold Chocolate - 40
+Cold Mochaccino - 40
+
+MAGGI
+Maggi (Masala) - 35
+Maggi (Extra Masala / Corn / Peri Peri) - 45
+Cheese Maggi - 45
+Egg bhurji Maggi - 50
+
+BURGER (Classic / With Cheese)
+Veg Burger - 50 / 60
+Chicken Burger - 60 / 70
+Peri Peri Chicken Burger - 80 / 90
+Barbeque Chicken Burger - 80 / 90
+Vada Pav - 30 / 40
+Bun Samosa - 40 / 50
+
+ROLLS (Classic / With Cheese)
+Veg Roll - 50 / 60
+Gobi Roll - 70 / 80
+Paneer Roll - 80 / 90
+Chicken Roll - 70 / 80
+Peri Peri Chicken Roll - 80 / 90
+Barbeque Chicken Roll - 80 / 90
+
+RICE/NOODLES
+Veg / Egg / Chicken - 70 / 80 / 90
+
+SANDWICHES (Classic / With Cheese)
+Veg Mayo Sandwich - 50
+Corn Mayo Sandwich - 50
+Corn Cheese Sandwich - 60
+Paneer Sandwich - 80 / 90
+Chicken Sandwich - 70 / 80
+Peri Peri Chicken Sandwich - 80 / 90
+Barbeque Chicken Sandwich - 80 / 90
+
+SNACKS
+Potato pop - 60
+French Fries Salted / Peri Peri - 60
+Jungli Fungli - 70
+Non Veg Jungli Fungli - 90
+Chicken popcorn - 70
+
+PASTA (Veg / Non-Veg)
+Pasta Creamy Alfredo (white sauce) - 70 / 90
+Pasta Creamy Alfredo (white sauce) with cheese - 80 / 100
+Peri Peri Mac n Cheese - 90 / 110
+
+MOMOS
+Veg / Chicken Momo - 50
+Veg / Chicken Momo Chat - 60
+Veg / Chicken Manchurian - 70
+
+COMBOS
+Veg Chinese Combo - 90
+Non Veg Chinese combo - 110

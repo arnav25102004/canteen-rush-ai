@@ -1,0 +1,74 @@
+Hari Super Sandwich R and D Block
+
+SANDWICH
+American Sweet Corn Sandwich - Rs. 50
+Veg Cheese Sandwich - Rs. 50
+Aloo Cheese Chilli Sandwich - Rs. 50
+Cheese Chilly Sandwich - Rs. 50
+Hari Special Sandwich - Rs. 50
+Spl. Veg Sandwich Toast - Rs. 50
+Sandwich Toast - Rs. 45
+Capsicum Cheese Sandwich - Rs. 50
+Cheese Corn Dahi Toast - Rs. 60
+Dahi Toast - Rs. 55
+Cheese Sandwich Dahi - Rs. 60
+Cheese Chilly Dahi - Rs. 60
+Chocolate Sandwich - Rs. 50
+Cheese Gulkan Sandwich - Rs. 50
+Peanut Butter Sandwich - Rs. 60
+Paneer Capsicum Sandwich - Rs. 70
+Jam Toast - Rs. 45
+Gulkan Toast - Rs. 45
+Peanut Butter Chocolate - Rs. 60
+Special American Corn Toast - Rs. 60
+
+BURGER ITEMS
+Veg Burger - Rs. 70
+Cheese Burger - Rs. 80
+Paneer Burger - Rs. 70
+
+VADA PAV
+Vada Pav - Rs. 40
+Paneer Vada Pav - Rs. 50
+
+PAV BHAJI
+Pav Bhaji - Rs. 70
+Cheese Pav Bhaji - Rs. 80
+Paneer Pav Bhaji - Rs. 80
+
+TWISTER ITEMS
+Twister - Rs. 60
+Moyas Twister - Rs. 70
+Fries - Rs. 80
+
+MASALA CHATS
+Masala Puri - Rs. 40
+Pani Puri - Rs. 40
+Masala Bhel Puri - Rs. 40
+Sev Puri - Rs. 45
+Aloo Puri - Rs. 45
+Samosa Masala - Rs. 50
+Cheese Masalapuri - Rs. 55
+Samosa Cheese Masala - Rs. 60
+Dhai Puri - Rs. 45
+Korean Cheese Classic Bun - Rs. 80
+
+MILK SHAKES (All at Rs. 80)
+Tender Coconut Milk Shake - Rs. 80
+Mango Milk Shake - Rs. 80
+Shithapal Milk Shake - Rs. 80
+Jack Fruit Milk Shake - Rs. 80
+Sapota Milk Shake - Rs. 80
+Guava Milk Shake - Rs. 80
+Banana Milk Shake - Rs. 80
+Pineapple Milk Shake - Rs. 80
+Strawberry Milk Shake - Rs. 80
+Avocado Milk Shake - Rs. 80
+Dates Milk Shake - Rs. 80
+Fig Milk Shake - Rs. 80
+Vanilla Milk Shake - Rs. 80
+Chocolate Milk Shake - Rs. 80
+Cold Coffee - Rs. 80
+Blackcurrent Milk Shake - Rs. 80
+Pista Milk Shake - Rs. 80
+Choco Milk Shake - Rs. 80

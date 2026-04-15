@@ -1,0 +1,48 @@
+Mariyan Cafe R&D Block
+
+LUNCH MENU
+Prawns Biriyani - 150
+Chicken Biriyani - 140/100
+Egg Biriyani - 100
+Veg Meals - 90
+Curd Rice - 60
+Chicken Meals - 140
+Fish Meals - 130
+Podi Choru - 130
+Chatti Choru - 130
+Ghee Rice with Chicken Curry - 120
+Kappa with Fish Curry - 110
+Kappa with Chicken Curry - 100
+Chappati with Egg Burji - 80
+Chappati with Chicken Curry - 100
+Chappati with Veg Curry - 80
+Chappati Egg Roast - 100
+Chappati Chicken Roast - 110
+Parota with Egg Burji - 80
+Parota with Chicken Curry - 100
+Parota with Veg Curry - 80
+Parota Egg Roast - 100
+Parota Chicken Roast - 110
+Chicken Kebab - 100
+Fish Fry - 80
+Veg Fried Rice - 70
+Egg Fried Rice - 90
+Chicken Fried Rice - 110
+Mushroom Fried Rice - 110
+Paneer Fried Rice - 110
+Veg Noodles - 70
+Egg Noodles - 90
+Chicken Noodles - 110
+Mushroom Noodles - 110
+Paneer Noodles - 110
+Mushroom Pepper Dry - 110
+Gobi Pepper Dry - 100
+Gobi Manchurian - 90
+Egg Manchurian - 100
+Baby Corn Manchurian - 100
+
+JUICES
+Lime - 30
+Water Melon - 40
+Pineapple - 50
+Kannur Cocktail - 70
