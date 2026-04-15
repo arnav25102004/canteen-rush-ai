@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native';
-import * as WebBrowser from 'expo-web-browser';
 import { useRouter, useLocalSearchParams } from 'expo-router';
+import RazorpayCheckout from 'react-native-razorpay';
 import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
 
@@ -9,95 +9,93 @@ export default function PaymentScreen() {
   const router = useRouter();
   const params = useLocalSearchParams<{
     razorpayOrderId: string;
-    amount: string;
+    amount: string;      // in rupees — converted to paise before passing to Razorpay
     keyId: string;
     userName: string;
     userEmail: string;
     cartJson: string;
     canteenId: string;
     slotId: string;
-    baseUrl: string;
   }>();
 
   const { clear } = useCartStore();
-  const [status, setStatus] = useState<'opening' | 'polling' | 'placing' | 'done' | 'failed'>('opening');
-  const [message, setMessage] = useState('Opening payment page...');
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const doneRef = useRef(false);
+  const [status, setStatus] = useState<'opening' | 'verifying' | 'placing' | 'done' | 'failed'>('opening');
+  const [message, setMessage] = useState('');
 
   useEffect(() => {
-    openPayment();
-    return () => { if (pollRef.current) clearInterval(pollRef.current); };
+    openRazorpay();
   }, []);
 
-  async function openPayment() {
-    const { razorpayOrderId, amount, userName, userEmail, baseUrl } = params;
-    const url = `${baseUrl}/payment/checkout?orderId=${razorpayOrderId}&amount=${amount}&name=${encodeURIComponent(userName || 'Student')}&email=${encodeURIComponent(userEmail || '')}`;
+  async function openRazorpay() {
+    const { razorpayOrderId, amount, keyId, userName, userEmail } = params;
 
-    await WebBrowser.openBrowserAsync(url, {
-      toolbarColor: '#1a1a2e',
-      controlsColor: '#e94560',
-    });
+    const options = {
+      description: 'ChristEats Canteen Order',
+      currency: 'INR',
+      key: keyId,
+      amount: String(Math.round(Number(amount) * 100)), // rupees → paise
+      order_id: razorpayOrderId,
+      name: 'ChristEats',
+      prefill: {
+        email: userEmail || '',
+        contact: '',
+        name: userName || 'Student',
+      },
+      theme: { color: '#E94560' },
+    };
 
-    // Browser closed — start polling for payment status
-    setStatus('polling');
-    setMessage('Checking payment status...');
-    startPolling();
-  }
-
-  function startPolling() {
-    let attempts = 0;
-    pollRef.current = setInterval(async () => {
-      attempts++;
-      try {
-        const { data } = await api.get(`/payment/status/${params.razorpayOrderId}`);
-        if (data.status === 'PAID') {
-          clearInterval(pollRef.current!);
-          await placeOrder(data.paymentId);
-        } else if (data.status === 'FAILED' || attempts > 10) {
-          clearInterval(pollRef.current!);
-          setStatus('failed');
-          setMessage('Payment was not completed. Please try again.');
-        }
-      } catch {
-        if (attempts > 10) {
-          clearInterval(pollRef.current!);
-          setStatus('failed');
-          setMessage('Could not verify payment. Please contact support.');
-        }
-      }
-    }, 1500);
-  }
-
-  async function placeOrder(paymentId: string) {
-    if (doneRef.current) return;
-    doneRef.current = true;
-    setStatus('placing');
-    setMessage('Placing your order...');
     try {
+      const paymentData = await (RazorpayCheckout as any).open(options);
+      await handlePaymentSuccess(paymentData);
+    } catch (error: any) {
+      // error.code === 0 means user cancelled
+      if (error?.code === 0) {
+        router.back();
+      } else {
+        setStatus('failed');
+        setMessage(error?.description || 'Payment failed. Please try again.');
+      }
+    }
+  }
+
+  async function handlePaymentSuccess(paymentData: any) {
+    setStatus('verifying');
+    setMessage('Verifying payment...');
+
+    try {
+      // Verify signature with backend
+      await api.post('/payments/callback', {
+        razorpayOrderId: paymentData.razorpay_order_id,
+        razorpayPaymentId: paymentData.razorpay_payment_id,
+        signature: paymentData.razorpay_signature,
+      });
+
+      // Place the canteen order
+      setStatus('placing');
+      setMessage('Placing your order...');
       const cartItems = JSON.parse(params.cartJson || '[]');
       const { data } = await api.post('/orders', {
         canteenId: params.canteenId,
         slotId: params.slotId || undefined,
         paymentMethod: 'RAZORPAY',
-        razorpayPaymentId: paymentId,
+        razorpayPaymentId: paymentData.razorpay_payment_id,
         items: cartItems,
       });
+
       clear();
-      setStatus('done');
       router.replace(`/order/${data.order.id}`);
     } catch {
       setStatus('failed');
-      setMessage('Order could not be placed. Please contact support.');
+      setMessage('Payment received but order could not be placed. Please contact support with your payment ID.');
     }
   }
 
   return (
     <View style={styles.center}>
-      {(status === 'opening' || status === 'polling' || status === 'placing') && (
+      {(status === 'opening' || status === 'verifying' || status === 'placing') && (
         <>
           <ActivityIndicator size="large" color="#e94560" />
-          <Text style={styles.msg}>{message}</Text>
+          <Text style={styles.msg}>{message || 'Opening Razorpay...'}</Text>
         </>
       )}
       {status === 'failed' && (

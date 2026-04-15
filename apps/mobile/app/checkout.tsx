@@ -5,7 +5,7 @@ import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
 import { useAuthStore } from '../store/authStore';
 
-interface Slot { id: string; startTime: string; endTime: string; available: number; }
+interface Slot { slotId: string; startTime: string; endTime: string; available: number; isCutoffPassed?: boolean; }
 
 type PaymentMethod = 'WALLET' | 'RAZORPAY';
 
@@ -25,9 +25,9 @@ export default function CheckoutScreen() {
       api.get('/wallet').then(r => setWallet(r.data.wallet)),
       canteenId
         ? api.get(`/canteens/${canteenId}/slots`).then(r => {
-            const available = (r.data.slots || []).filter((s: any) => s.available > 0);
+            const available = (r.data.slots || []).filter((s: any) => s.available > 0 && !s.isCutoffPassed);
             setSlots(available);
-            if (available.length > 0) setSelectedSlot(available[0].id);
+            if (available.length > 0) setSelectedSlot(available[0].slotId);
           })
         : Promise.resolve(),
     ]).finally(() => setLoading(false));
@@ -67,11 +67,10 @@ export default function CheckoutScreen() {
     if (!canteenId) return;
     setPlacing(true);
     try {
-      const { data } = await api.post('/payment/create-order', {
+      const { data } = await api.post('/payments/create-order', {
         amount: total(),
         receipt: `order_${Date.now()}`,
       });
-      const baseUrl = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
       router.push({
         pathname: '/payment',
         params: {
@@ -83,11 +82,10 @@ export default function CheckoutScreen() {
           cartJson: JSON.stringify(items.map(i => ({ menuItemId: i.menuItemId, quantity: i.quantity }))),
           canteenId: canteenId,
           slotId: selectedSlot || '',
-          baseUrl,
         },
       });
     } catch (err: any) {
-      Alert.alert('Payment Error', err.response?.data?.detail || 'Could not initiate payment');
+      Alert.alert('Payment Error', err.response?.data?.error || err.response?.data?.detail || 'Could not initiate payment');
     } finally {
       setPlacing(false);
     }
@@ -134,12 +132,12 @@ export default function CheckoutScreen() {
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>Pickup Slot</Text>
           {slots.map(slot => (
-            <TouchableOpacity key={slot.id} style={[styles.slotChip, selectedSlot === slot.id && styles.slotChipActive]}
-              onPress={() => setSelectedSlot(slot.id)}>
-              <Text style={[styles.slotText, selectedSlot === slot.id && styles.slotTextActive]}>
+            <TouchableOpacity key={slot.slotId} style={[styles.slotChip, selectedSlot === slot.slotId && styles.slotChipActive]}
+              onPress={() => setSelectedSlot(slot.slotId)}>
+              <Text style={[styles.slotText, selectedSlot === slot.slotId && styles.slotTextActive]}>
                 {slot.startTime}–{slot.endTime}
               </Text>
-              <Text style={[styles.slotAvail, selectedSlot === slot.id && { color: '#ffffff80' }]}>
+              <Text style={[styles.slotAvail, selectedSlot === slot.slotId && { color: '#ffffff80' }]}>
                 {slot.available} left
               </Text>
             </TouchableOpacity>

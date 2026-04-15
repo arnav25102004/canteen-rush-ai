@@ -5,7 +5,7 @@ import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
 
 const TYPE_COLOR: Record<string, string> = { RECHARGE: '#10b981', DEBIT: '#ef4444', REFUND: '#3b82f6' };
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:8000';
+const BASE_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
 
 export default function WalletScreen() {
   const { user } = useAuthStore();
@@ -22,12 +22,14 @@ export default function WalletScreen() {
   }, []);
 
   async function loadWallet() {
-    const [w, t] = await Promise.all([
-      api.get('/wallet').then(r => r.data.wallet),
-      api.get('/wallet/transactions').then(r => r.data.transactions || []),
-    ]);
-    setWallet(w);
-    setTransactions(t);
+    try {
+      const [w, t] = await Promise.all([
+        api.get('/wallet').then(r => r.data.wallet),
+        api.get('/wallet/transactions').then(r => r.data.transactions || []),
+      ]);
+      setWallet(w);
+      setTransactions(t);
+    } catch { /* ignore */ }
   }
 
   async function recharge() {
@@ -36,58 +38,51 @@ export default function WalletScreen() {
 
     setLoading(true);
     try {
-      // 1. Create Razorpay order
-      const { data } = await api.post('/payment/create-order', {
-        amount: n,
-        receipt: `wallet_${Date.now()}`,
-      });
+      // 1. Create Razorpay order for wallet recharge
+      const { data } = await api.post('/wallet/recharge', { amount: n });
+      const { razorpayOrderId } = data;
 
-      const razorpayOrderId = data.orderId;
       setShowRecharge(false);
       setAmount('');
 
-      // 2. Open Razorpay in browser
-      const url = `${API_URL}/payment/checkout?orderId=${razorpayOrderId}&amount=${data.amount}&name=${encodeURIComponent(user?.name || 'Student')}&email=${encodeURIComponent(user?.email || '')}`;
+      // 2. Open checkout page in system browser
+      const url = `${BASE_URL}/api/payments/checkout?orderId=${razorpayOrderId}&amount=${n}&name=${encodeURIComponent(user?.name || 'Student')}&email=${encodeURIComponent(user?.email || '')}`;
       await WebBrowser.openBrowserAsync(url, {
         toolbarColor: '#1a1a2e',
         controlsColor: '#e94560',
       });
 
       // 3. Poll for payment confirmation
-      setLoading(true);
       let attempts = 0;
       pollRef.current = setInterval(async () => {
         attempts++;
         try {
-          const { data: statusData } = await api.get(`/payment/status/${razorpayOrderId}`);
-          if (statusData.status === 'PAID') {
+          const { data: s } = await api.get(`/payments/status/${razorpayOrderId}`);
+          if (s.status === 'PAID') {
             clearInterval(pollRef.current!);
-            // 4. Credit the wallet
-            await api.post('/wallet/recharge', { amount: n, paymentId: statusData.paymentId });
+            // 4. Verify + credit wallet
+            await api.post('/wallet/recharge/verify', {
+              razorpayOrderId,
+              razorpayPaymentId: s.paymentId,
+              signature: s.signature,
+              amount: n,
+            });
             await loadWallet();
             setLoading(false);
             Alert.alert('Success', `₹${n.toFixed(0)} added to your wallet!`);
-          } else if (statusData.status === 'FAILED' || attempts > 15) {
+          } else if (s.status === 'FAILED' || attempts > 15) {
             clearInterval(pollRef.current!);
             setLoading(false);
-            if (attempts > 15) Alert.alert('Timeout', 'Payment not confirmed. If money was deducted, contact support.');
+            if (attempts > 15) Alert.alert('Timeout', 'Payment not confirmed. Contact support if money was deducted.');
           }
         } catch {
-          if (attempts > 15) {
-            clearInterval(pollRef.current!);
-            setLoading(false);
-          }
+          if (attempts > 15) { clearInterval(pollRef.current!); setLoading(false); }
         }
       }, 1500);
 
     } catch (e: any) {
       setLoading(false);
-      const detail = e?.response?.data?.detail || '';
-      if (detail.includes('not configured')) {
-        Alert.alert('Razorpay not set up', 'Add your Razorpay keys to backend/.env and restart the backend.');
-      } else {
-        Alert.alert('Failed', detail || 'Could not initiate payment');
-      }
+      Alert.alert('Failed', e?.response?.data?.error || 'Could not initiate payment');
     }
   }
 
@@ -96,7 +91,7 @@ export default function WalletScreen() {
       {loading && (
         <View style={styles.loadingOverlay}>
           <ActivityIndicator size="large" color="#e94560" />
-          <Text style={styles.loadingText}>Processing payment...</Text>
+          <Text style={styles.loadingText}>Processing payment…</Text>
         </View>
       )}
 

@@ -37,7 +37,7 @@ export default function LoginScreen() {
       // Navigate explicitly — don't rely solely on _layout.tsx segment detection
       router.replace('/(tabs)/home');
     } catch (e: any) {
-      const msg = e?.response?.data?.detail || e?.message || 'Something went wrong';
+      const msg = e?.response?.data?.error || e?.response?.data?.detail || e?.message || 'Something went wrong';
       Alert.alert('Error', msg);
     } finally {
       setLoading(false);
