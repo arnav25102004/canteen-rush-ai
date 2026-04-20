@@ -1,9 +1,8 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { CONFIG } from '../config';
 
-const BASE = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
-
-const api = axios.create({ baseURL: `${BASE}/api` });
+const api = axios.create({ baseURL: CONFIG.API_URL });
 
 // Attach stored auth token to every request
 api.interceptors.request.use(async (config) => {
