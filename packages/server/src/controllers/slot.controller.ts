@@ -1,4 +1,4 @@
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { getSlotAvailability, generateSlotsForCanteen } from '../services/slot.service';
@@ -21,9 +21,10 @@ const updateSlotSchema = z.object({
   walkInReserved: z.number().int().optional(),
 });
 
-export async function listSlotsForCanteen(req: Request, res: Response) {
+export async function listSlotsForCanteen(req: AuthRequest, res: Response) {
   const { id: canteenId } = req.params;
   const { date } = req.query;
+  const userRole = req.user?.role;
 
   const targetDate = date ? new Date(date as string) : new Date();
   targetDate.setUTCHours(0, 0, 0, 0);
@@ -36,8 +37,8 @@ export async function listSlotsForCanteen(req: Request, res: Response) {
     orderBy: { startTime: 'asc' },
   });
 
-  // Fetch all availabilities in parallel instead of sequential per-slot
-  const availabilities = await Promise.all(slots.map((s) => getSlotAvailability(s.id)));
+  // Fetch all availabilities in parallel, passing user role for faculty priority
+  const availabilities = await Promise.all(slots.map((s) => getSlotAvailability(s.id, userRole)));
 
   const enriched = slots.map((slot, i) => {
     const { hours, minutes } = parseTimeString(slot.startTime);

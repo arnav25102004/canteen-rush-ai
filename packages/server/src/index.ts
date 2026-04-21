@@ -6,8 +6,12 @@ import compression from 'compression';
 import morgan from 'morgan';
 import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
+import path from 'path';
 
-dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../.env') });
+console.log('Looking for .env at:', path.resolve(__dirname, '../.env'));
+console.log('RAZORPAY_KEY_ID:', process.env.RAZORPAY_KEY_ID ? 'LOADED ✅' : 'MISSING ❌');
+console.log('All env keys:', Object.keys(process.env).filter(k => k.includes('RAZORPAY')));
 
 import { prisma } from './config/database';
 import { redis } from './config/redis';
@@ -32,18 +36,26 @@ import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
 const app = express();
 const server = http.createServer(app);
 
+const allowedOrigins = [
+  'http://localhost:3000',
+  'http://localhost:8081',
+  ...(process.env.CORS_ORIGINS?.split(',').map(o => o.trim()) || []),
+  ...(process.env.WEB_URL ? [process.env.WEB_URL] : []),
+].filter(Boolean);
+
 // Socket.IO setup
 const io = new SocketIOServer(server, {
-  cors: {
-    origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:8081'],
-    credentials: true,
-  },
+  cors: { origin: (origin, cb) => cb(null, true), credentials: true },
 });
 
 // Middleware
 app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
 app.use(cors({
-  origin: process.env.CORS_ORIGINS?.split(',') || ['http://localhost:3000', 'http://localhost:8081'],
+  origin: (origin, callback) => {
+    // Allow no-origin requests (mobile apps, health checks) and listed origins
+    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
+    callback(null, true); // permissive for now — tighten in production
+  },
   credentials: true,
 }));
 app.use(compression());
@@ -57,10 +69,9 @@ app.use((req: any, _res, next) => {
   next();
 });
 
-// Health check
-app.get('/health', (_req, res) => {
-  res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
+// Health check (both paths for compatibility)
+app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
+app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
 // API Routes
 app.use('/api/auth', authRoutes);

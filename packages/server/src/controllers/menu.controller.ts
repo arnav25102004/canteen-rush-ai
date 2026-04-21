@@ -185,3 +185,37 @@ export async function uploadItemImage(req: AuthRequest, res: Response) {
   const item = await prisma.menuItem.update({ where: { id }, data: { imageUrl } });
   return res.json({ item });
 }
+
+// ─── Favorites ────────────────────────────────────────────────────────────────
+
+export async function getFavorites(req: AuthRequest, res: Response) {
+  const favorites = await prisma.favorite.findMany({
+    where: { userId: req.user!.id },
+    include: {
+      menuItem: {
+        include: { canteen: { select: { id: true, name: true } }, category: { select: { name: true } } },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
+  return res.json({ favorites: favorites.map((f) => f.menuItem) });
+}
+
+export async function addFavorite(req: AuthRequest, res: Response) {
+  const { menuItemId } = req.params;
+  const item = await prisma.menuItem.findUnique({ where: { id: menuItemId } });
+  if (!item) return res.status(404).json({ error: 'Menu item not found' });
+
+  try {
+    await prisma.favorite.create({ data: { userId: req.user!.id, menuItemId } });
+  } catch {
+    // Already favorited (unique constraint) — treat as success
+  }
+  return res.json({ success: true });
+}
+
+export async function removeFavorite(req: AuthRequest, res: Response) {
+  const { menuItemId } = req.params;
+  await prisma.favorite.deleteMany({ where: { userId: req.user!.id, menuItemId } });
+  return res.json({ success: true });
+}

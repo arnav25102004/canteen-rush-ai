@@ -1,16 +1,14 @@
 import { prisma } from '../config/database';
-import { incrOrderSeq } from '../config/redis';
+import { redis, KEYS, incrOrderSeq } from '../config/redis';
 import { generateQRToken } from './qr.service';
-import { incrementSlotOrders, decrementSlotOrders } from './slot.service';
 import { sendOrderNotification } from './notification.service';
-import { PaymentMethod, OrderStatus } from '@prisma/client';
+import { OrderStatus } from '@prisma/client';
 
 interface PlaceOrderInput {
   userId: string;
   canteenId: string;
   slotId?: string;
   items: Array<{ menuItemId: string; quantity: number; customizations?: Record<string, unknown>; notes?: string }>;
-  paymentMethod: PaymentMethod;
   specialInstructions?: string;
 }
 
@@ -21,15 +19,12 @@ export async function generateOrderNumber(canteenId: string): Promise<string> {
 }
 
 export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
-  const { userId, canteenId, slotId, items, paymentMethod, specialInstructions } = input;
+  const { userId, canteenId, slotId, items, specialInstructions } = input;
 
-  // Fetch only items belonging to this canteen — eliminates cross-canteen loop validation
+  // Validate items belong to this canteen and are available
   const menuItems = await prisma.menuItem.findMany({
-    where: {
-      id: { in: items.map((i) => i.menuItemId) },
-      canteenId,
-    },
-    select: { id: true, name: true, price: true, isAvailable: true, canteenId: true },
+    where: { id: { in: items.map((i) => i.menuItemId) }, canteenId },
+    select: { id: true, name: true, price: true, isAvailable: true },
   });
 
   if (menuItems.length !== items.length) {
@@ -41,11 +36,18 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
     throw new Error(`${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
   }
 
+  // Pre-validate slot (read-only check before transaction)
   if (slotId) {
-    const booked = await incrementSlotOrders(slotId);
-    if (!booked) throw new Error('This time slot is full or closed. Please choose another slot.');
+    const slot = await prisma.pickupSlot.findUnique({
+      where: { id: slotId },
+      select: { maxOrders: true, walkInReserved: true, currentOrders: true, isOpen: true },
+    });
+    if (!slot || !slot.isOpen) throw new Error('This time slot is closed. Please choose another slot.');
+    const preOrderCap = slot.maxOrders - slot.walkInReserved;
+    if (slot.currentOrders >= preOrderCap) throw new Error('This time slot is full. Please choose another slot.');
   }
 
+  // Calculate totals from database prices
   let subtotal = 0;
   const orderItems = items.map((item) => {
     const mi = menuItems.find((m) => m.id === item.menuItemId)!;
@@ -61,35 +63,39 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
     };
   });
 
-  const totalAmount = subtotal; // platformFee = 0
+  const totalAmount = subtotal;
   const orderNumber = await generateOrderNumber(canteenId);
 
-  let initialStatus: OrderStatus = OrderStatus.PENDING;
-  let paymentStatus: 'PENDING' | 'PAID' = 'PENDING';
-
-  if (paymentMethod === PaymentMethod.WALLET) {
-    const wallet = await prisma.wallet.findUnique({
-      where: { userId },
-      select: { balance: true },
-    });
-    if (!wallet || Number(wallet.balance) < totalAmount) {
-      if (slotId) await decrementSlotOrders(slotId);
-      throw new Error('Insufficient wallet balance. Please recharge.');
-    }
-    initialStatus = OrderStatus.CONFIRMED;
-    paymentStatus = 'PAID';
-  }
-
+  // Single atomic transaction: balance check + order creation + debit + slot reservation
   const order = await prisma.$transaction(async (tx) => {
+    // Re-check wallet inside transaction to prevent race conditions
+    const wallet = await tx.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
+    if (!wallet) throw new Error('Wallet not found. Please contact support.');
+    if (Number(wallet.balance) < totalAmount) {
+      throw new Error(`INSUFFICIENT_BALANCE:${wallet.balance}:${totalAmount}`);
+    }
+
+    // Re-check slot inside transaction
+    if (slotId) {
+      const slot = await tx.pickupSlot.findUnique({
+        where: { id: slotId },
+        select: { maxOrders: true, walkInReserved: true, currentOrders: true, isOpen: true },
+      });
+      if (!slot || !slot.isOpen) throw new Error('This time slot is closed.');
+      const preOrderCap = slot.maxOrders - slot.walkInReserved;
+      if (slot.currentOrders >= preOrderCap) throw new Error('This time slot is now full. Please choose another slot.');
+    }
+
+    // Create the order
     const newOrder = await tx.order.create({
       data: {
         orderNumber,
         userId,
         canteenId,
         slotId,
-        status: initialStatus,
-        paymentStatus,
-        paymentMethod,
+        status: OrderStatus.CONFIRMED,
+        paymentStatus: 'PAID',
+        paymentMethod: 'WALLET',
         subtotal,
         platformFee: 0,
         totalAmount,
@@ -111,31 +117,43 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
       },
     });
 
-    if (paymentStatus === 'PAID') {
-      const updatedWallet = await tx.wallet.update({
-        where: { userId },
-        data: { balance: { decrement: totalAmount } },
-      });
-      await tx.walletTransaction.create({
-        data: {
-          walletId: updatedWallet.id,
-          orderId: newOrder.id,
-          type: 'DEBIT',
-          amount: totalAmount,
-          balanceAfter: updatedWallet.balance,
-          description: `Order #${orderNumber}`,
-        },
-      });
+    // Deduct wallet
+    const updatedWallet = await tx.wallet.update({
+      where: { userId },
+      data: { balance: { decrement: totalAmount } },
+    });
 
-      const qrToken = generateQRToken({ orderId: newOrder.id, userId, orderNumber, canteenId });
-      await tx.order.update({ where: { id: newOrder.id }, data: { qrCode: qrToken } });
-      return { ...newOrder, qrCode: qrToken };
+    // Log wallet transaction
+    await tx.walletTransaction.create({
+      data: {
+        walletId: wallet.id,
+        orderId: newOrder.id,
+        type: 'DEBIT',
+        amount: totalAmount,
+        balanceAfter: updatedWallet.balance,
+        description: `Order #${orderNumber}`,
+      },
+    });
+
+    // Reserve slot
+    if (slotId) {
+      await tx.pickupSlot.update({
+        where: { id: slotId },
+        data: { currentOrders: { increment: 1 } },
+      });
     }
 
-    return newOrder;
+    // Generate QR token and store it
+    const qrToken = generateQRToken({ orderId: newOrder.id, userId, orderNumber, canteenId });
+    await tx.order.update({ where: { id: newOrder.id }, data: { qrCode: qrToken } });
+
+    return { ...newOrder, qrCode: qrToken };
   });
 
-  // Batch update totalOrders counts
+  // Invalidate slot cache after transaction
+  if (slotId) await redis.del(KEYS.slotAvailability(slotId));
+
+  // Bump totalOrders counters (non-critical, best effort)
   await prisma.$transaction(
     items.map((item) =>
       prisma.menuItem.update({
@@ -145,9 +163,9 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
     )
   );
 
+  // Real-time + push notification
   const ioServer = io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
   ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order });
-
   await sendOrderNotification(userId, order.id, orderNumber, OrderStatus.CONFIRMED);
 
   return order;
@@ -161,14 +179,17 @@ export async function cancelOrder(
 ) {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    select: { status: true, userId: true, canteenId: true, slotId: true, totalAmount: true, paymentStatus: true, paymentMethod: true, orderNumber: true },
+    select: {
+      status: true, userId: true, canteenId: true, slotId: true,
+      totalAmount: true, paymentStatus: true, orderNumber: true,
+    },
   });
 
   if (!order) throw new Error('Order not found');
 
-  const cancellableStatuses: OrderStatus[] = [OrderStatus.PENDING, OrderStatus.CONFIRMED];
+  const cancellableStatuses: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED];
   if (cancelledBy === 'student' && !cancellableStatuses.includes(order.status)) {
-    throw new Error('Cannot cancel order that is already being prepared');
+    throw new Error('Cannot cancel an order that is already being prepared');
   }
 
   await prisma.$transaction(async (tx) => {
@@ -177,7 +198,8 @@ export async function cancelOrder(
       data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: reason },
     });
 
-    if (order.paymentStatus === 'PAID' && order.paymentMethod === PaymentMethod.WALLET) {
+    // Refund wallet for paid wallet orders
+    if (order.paymentStatus === 'PAID') {
       const wallet = await tx.wallet.update({
         where: { userId: order.userId },
         data: { balance: { increment: Number(order.totalAmount) } },
@@ -195,7 +217,14 @@ export async function cancelOrder(
     }
   });
 
-  if (order.slotId) await decrementSlotOrders(order.slotId);
+  // Decrement slot and invalidate cache
+  if (order.slotId) {
+    await prisma.pickupSlot.update({
+      where: { id: order.slotId },
+      data: { currentOrders: { decrement: 1 } },
+    });
+    await redis.del(KEYS.slotAvailability(order.slotId));
+  }
 
   const ioServer = io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
   ioServer?.to(`order:${orderId}`).emit('order:status_update', { orderId, status: OrderStatus.CANCELLED });

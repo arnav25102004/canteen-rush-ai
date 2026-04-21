@@ -5,7 +5,7 @@ import {
 } from '../controllers/canteen.controller';
 import { getCanteenMenu, searchMenuInCanteen, searchMenuGlobal } from '../controllers/menu.controller';
 import { listSlotsForCanteen } from '../controllers/slot.controller';
-import { authenticate, requireAdmin } from '../middleware/auth';
+import { authenticate, requireAdmin, optionalAuthenticate } from '../middleware/auth';
 
 const router = Router();
 
@@ -15,7 +15,7 @@ router.get('/:id', getCanteen);
 router.get('/:id/live-stats', getCanteenLiveStats);
 router.get('/:id/menu', getCanteenMenu);
 router.get('/:id/menu/search', searchMenuInCanteen);
-router.get('/:id/slots', listSlotsForCanteen);
+router.get('/:id/slots', optionalAuthenticate, listSlotsForCanteen);
 
 // Admin only
 router.post('/', authenticate, requireAdmin, createCanteen);

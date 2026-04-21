@@ -20,7 +20,11 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a1a2e"
       },
-      "package": "com.christuniversity.eats"
+      "package": "com.christuniversity.eats",
+      "permissions": [
+        "android.permission.CAMERA",
+        "android.permission.RECORD_AUDIO"
+      ]
     },
     "plugins": [
       "expo-router",
@@ -33,6 +37,12 @@
     "web": {
       "bundler": "metro",
       "output": "static"
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "f42f4eae-7eda-48f8-96cc-fee3922a1342"
+      }
     }
   }
 }

@@ -72,13 +72,16 @@ async function createSlotsForCanteen(canteenId: string, date: Date, maxOrders = 
     ...makeTimeSlots(7, 45, 10, 30, 15, maxOrders),
     ...makeTimeSlots(12, 0, 14, 30, 15, maxOrders),
   ];
-  for (const s of slotDefs) {
-    await prisma.pickupSlot.upsert({
-      where: { canteenId_date_startTime: { canteenId, date, startTime: s.startTime } },
-      update: {},
-      create: { canteenId, date, startTime: s.startTime, endTime: s.endTime, maxOrders: s.maxOrders },
-    });
-  }
+  await prisma.pickupSlot.createMany({
+    data: slotDefs.map(s => ({
+      canteenId,
+      date,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      maxOrders,
+    })),
+    skipDuplicates: true,
+  });
 }
 
 // ─── main ─────────────────────────────────────────────────────────────────────
@@ -87,10 +90,21 @@ async function main() {
   console.log('🌱  Seeding database…');
 
   // ── 0. Wipe old menu data (safe — preserves orders / wallets / users) ────────
-  await prisma.menuItem.deleteMany({});
-  await prisma.menuCategory.deleteMany({});
-  await prisma.pickupSlot.deleteMany({});
-  await prisma.canteen.deleteMany({});
+ // ── 0. Wipe ALL data in correct order ────────
+await prisma.wallet.deleteMany({});
+await prisma.user.deleteMany({});
+ await prisma.walletTransaction.deleteMany({});
+await prisma.notification.deleteMany({});
+await prisma.rating.deleteMany({});
+await prisma.favorite.deleteMany({});
+await prisma.orderItem.deleteMany({});
+await prisma.order.deleteMany({});
+await prisma.announcement.deleteMany({});
+await prisma.dailySettlement.deleteMany({});
+await prisma.menuItem.deleteMany({});
+await prisma.menuCategory.deleteMany({});
+await prisma.pickupSlot.deleteMany({});
+await prisma.canteen.deleteMany({});
   console.log('Old canteen / menu data cleared.');
 
   // ── 1. Canteens ───────────────────────────────────────────────────────────────
@@ -1032,19 +1046,6 @@ async function main() {
   });
 
   await prisma.user.upsert({
-    where: { firebaseUid: 'dev_vendor_christuniversity_in' },
-    update: { email: 'vendor@christuniversity.in', name: 'Mingoes Vendor', role: UserRole.VENDOR },
-    create: {
-      firebaseUid: 'dev_vendor_christuniversity_in',
-      email: 'vendor@christuniversity.in',
-      name: 'Mingoes Vendor',
-      role: UserRole.VENDOR,
-      campus: 'Central Campus',
-      vendorCanteen: { connect: { id: mingoes.id } },
-    },
-  });
-
-  await prisma.user.upsert({
     where: { firebaseUid: 'dev_admin_christuniversity_in' },
     update: { email: 'admin@christuniversity.in', name: 'University Admin', role: UserRole.ADMIN },
     create: {
@@ -1056,9 +1057,54 @@ async function main() {
     },
   });
 
-  console.log('✅  Test users created.');
-  console.log(`\n🎉  Seed complete! ${canteens.length} canteens, 11 pickup slot sets, 3 test users.`);
-  console.log('   student@christuniversity.in  / vendor@christuniversity.in  / admin@christuniversity.in');
+  // ── Vendor accounts for every canteen ────────────────────────────────────────
+  const vendorMappings = [
+    { canteen: mingoes,      email: 'vendor@christuniversity.in',              name: 'Mingoes Vendor',            firebaseUid: 'dev_vendor_christuniversity_in' },
+    { canteen: bakery,       email: 'vendor.bakery@christuniversity.in',        name: 'Christ Bakery Vendor',      firebaseUid: 'dev_vendor_bakery_christuniversity_in' },
+    { canteen: eleven,       email: 'vendor.eleven@christuniversity.in',        name: 'Eleven Vendor',             firebaseUid: 'dev_vendor_eleven_christuniversity_in' },
+    { canteen: michaels,     email: 'vendor.michaels@christuniversity.in',      name: "Michael's Corner Vendor",   firebaseUid: 'dev_vendor_michaels_christuniversity_in' },
+    { canteen: punjabi,      email: 'vendor.punjabi@christuniversity.in',       name: 'Punjabi Bites Vendor',      firebaseUid: 'dev_vendor_punjabi_christuniversity_in' },
+    { canteen: mariyan,      email: 'vendor.mariyan@christuniversity.in',       name: 'Mariyan Cafe Vendor',       firebaseUid: 'dev_vendor_mariyan_christuniversity_in' },
+    { canteen: bhavani,      email: 'vendor.bhavani@christuniversity.in',       name: 'Bhavani Foods Vendor',      firebaseUid: 'dev_vendor_bhavani_christuniversity_in' },
+    { canteen: hari,         email: 'vendor.hari@christuniversity.in',          name: 'Hari Sandwich Vendor',      firebaseUid: 'dev_vendor_hari_christuniversity_in' },
+    { canteen: kiosk,        email: 'vendor.kiosk@christuniversity.in',         name: 'Kiosk Canteen Vendor',      firebaseUid: 'dev_vendor_kiosk_christuniversity_in' },
+    { canteen: birdsPark,    email: 'vendor.birdspark@christuniversity.in',     name: 'Birds Park Vendor',         firebaseUid: 'dev_vendor_birdspark_christuniversity_in' },
+    { canteen: freshetaria,  email: 'vendor.freshetaria@christuniversity.in',   name: 'Freshetaria Vendor',        firebaseUid: 'dev_vendor_freshetaria_christuniversity_in' },
+  ];
+
+  for (const v of vendorMappings) {
+    const vendorUser = await prisma.user.upsert({
+      where: { firebaseUid: v.firebaseUid },
+      update: { email: v.email, name: v.name, role: UserRole.VENDOR },
+      create: {
+        firebaseUid: v.firebaseUid,
+        email: v.email,
+        name: v.name,
+        role: UserRole.VENDOR,
+        campus: 'Central Campus',
+      },
+    });
+    // Assign to canteen (canteen was just recreated so must update vendorId directly)
+    await prisma.canteen.update({
+      where: { id: v.canteen.id },
+      data: { vendorId: vendorUser.id },
+    });
+  }
+
+  console.log('✅  Test users created (student + admin + 11 vendor accounts).');
+  console.log(`\n🎉  Seed complete! ${canteens.length} canteens, 11 pickup slot sets, 13 users.`);
+  console.log('   student@christuniversity.in  /  admin@christuniversity.in');
+  console.log('   vendor@christuniversity.in  (Mingoes)');
+  console.log('   vendor.bakery@christuniversity.in  (Christ Bakery)');
+  console.log('   vendor.eleven@christuniversity.in  (Eleven)');
+  console.log('   vendor.michaels@christuniversity.in  (Michael\'s Corner)');
+  console.log('   vendor.punjabi@christuniversity.in  (Punjabi Bites)');
+  console.log('   vendor.mariyan@christuniversity.in  (Mariyan Cafe)');
+  console.log('   vendor.bhavani@christuniversity.in  (Bhavani Foods)');
+  console.log('   vendor.hari@christuniversity.in  (Hari Super Sandwich)');
+  console.log('   vendor.kiosk@christuniversity.in  (Kiosk Canteen)');
+  console.log('   vendor.birdspark@christuniversity.in  (Birds Park)');
+  console.log('   vendor.freshetaria@christuniversity.in  (Freshetaria)');
   void student;
 }
 

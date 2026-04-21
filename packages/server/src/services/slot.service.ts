@@ -1,6 +1,7 @@
 import { prisma } from '../config/database';
 import { redis, KEYS } from '../config/redis';
 import { generateTimeSlots } from '../utils/helpers';
+import { UserRole } from '@prisma/client';
 
 interface SlotAvailability {
   slotId: string;
@@ -16,14 +17,21 @@ interface SlotAvailability {
   isOpen: boolean;
 }
 
-export async function getSlotAvailability(slotId: string): Promise<SlotAvailability | null> {
-  const cached = await redis.get(KEYS.slotAvailability(slotId));
+export async function getSlotAvailability(slotId: string, userRole?: UserRole): Promise<SlotAvailability | null> {
+  const isFaculty = userRole === UserRole.FACULTY || userRole === UserRole.ADMIN;
+  const cacheKey = isFaculty ? `${KEYS.slotAvailability(slotId)}:faculty` : KEYS.slotAvailability(slotId);
+
+  const cached = await redis.get(cacheKey);
   if (cached) return JSON.parse(cached);
 
   const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
   if (!slot) return null;
 
-  const preOrderCapacity = slot.maxOrders - slot.walkInReserved;
+  // Faculty can use both general + faculty-reserved slots; students cannot use faculty-reserved
+  const preOrderCapacity = isFaculty
+    ? slot.maxOrders - slot.walkInReserved
+    : slot.maxOrders - slot.walkInReserved - slot.facultyReserved;
+
   const available = Math.max(0, preOrderCapacity - slot.currentOrders);
   const fillPercentage = preOrderCapacity > 0
     ? Math.round((slot.currentOrders / preOrderCapacity) * 100)
@@ -43,7 +51,7 @@ export async function getSlotAvailability(slotId: string): Promise<SlotAvailabil
     isOpen: slot.isOpen,
   };
 
-  await redis.setex(KEYS.slotAvailability(slotId), 30, JSON.stringify(availability));
+  await redis.setex(cacheKey, 30, JSON.stringify(availability));
   return availability;
 }
 

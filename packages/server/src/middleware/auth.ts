@@ -61,4 +61,30 @@ export function requireRole(...roles: UserRole[]) {
 
 export const requireVendor = requireRole(UserRole.VENDOR, UserRole.ADMIN);
 export const requireAdmin = requireRole(UserRole.ADMIN);
-export const requireStudent = requireRole(UserRole.STUDENT, UserRole.ADMIN);
+export const requireStudent = requireRole(UserRole.STUDENT, UserRole.FACULTY, UserRole.ADMIN);
+
+// Attaches user if token present but does not reject unauthenticated requests
+export async function optionalAuthenticate(req: AuthRequest, res: Response, next: NextFunction) {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) return next();
+
+  const token = authHeader.slice(7);
+  const decoded = await verifyFirebaseToken(token);
+  if (!decoded) return next();
+
+  const user = await prisma.user.findUnique({
+    where: { firebaseUid: decoded.uid },
+    include: { vendorCanteen: { select: { id: true } } },
+  });
+  if (user) {
+    req.user = {
+      id: user.id,
+      firebaseUid: user.firebaseUid,
+      email: user.email,
+      name: user.name,
+      role: user.role,
+      canteenId: user.vendorCanteen?.id,
+    };
+  }
+  next();
+}

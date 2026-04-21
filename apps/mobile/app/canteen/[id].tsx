@@ -10,19 +10,35 @@ interface Category { id: string; name: string; items: MenuItem[]; }
 export default function CanteenMenuScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const router = useRouter();
-  const { addItem, itemCount, total, canteenId } = useCartStore();
+  const { addItem, itemCount, total } = useCartStore();
   const [categories, setCategories] = useState<Category[]>([]);
   const [popular, setPopular] = useState<MenuItem[]>([]);
   const [canteen, setCanteen] = useState<any>(null);
   const [activeCategory, setActiveCategory] = useState('Popular');
+  const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
       api.get(`/canteens/${id}`).then(r => setCanteen(r.data.canteen)),
       api.get(`/canteens/${id}/menu`).then(r => { setCategories(r.data.categories); setPopular(r.data.popular); }),
+      api.get('/menu/favorites').then(r => setFavorites(new Set((r.data.favorites as any[]).map((f: any) => f.id)))).catch(() => null),
     ]).finally(() => setLoading(false));
   }, [id]);
+
+  async function toggleFavorite(menuItemId: string) {
+    const isFav = favorites.has(menuItemId);
+    const next = new Set(favorites);
+    if (isFav) {
+      next.delete(menuItemId);
+      setFavorites(next);
+      await api.delete(`/menu/favorites/${menuItemId}`).catch(() => null);
+    } else {
+      next.add(menuItemId);
+      setFavorites(next);
+      await api.post(`/menu/favorites/${menuItemId}`).catch(() => null);
+    }
+  }
 
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#e94560" /></View>;
 
@@ -46,7 +62,16 @@ export default function CanteenMenuScreen() {
       </ScrollView>
 
       <FlatList data={currentItems} keyExtractor={i => i.id} contentContainerStyle={{ padding: 16 }}
-        renderItem={({ item }) => <MenuItemCard item={item} canteenId={id!} canteenName={canteen?.name || ''} addItem={addItem} />}
+        renderItem={({ item }) => (
+          <MenuItemCard
+            item={item}
+            canteenId={id!}
+            canteenName={canteen?.name || ''}
+            addItem={addItem}
+            isFavorite={favorites.has(item.id)}
+            onToggleFavorite={toggleFavorite}
+          />
+        )}
       />
 
       {itemCount() > 0 && (
@@ -59,7 +84,7 @@ export default function CanteenMenuScreen() {
   );
 }
 
-function MenuItemCard({ item, canteenId, canteenName, addItem }: any) {
+function MenuItemCard({ item, canteenId, canteenName, addItem, isFavorite, onToggleFavorite }: any) {
   return (
     <View style={[styles.itemCard, !item.isAvailable && { opacity: 0.5 }]}>
       <View style={styles.vegDot}>
@@ -71,7 +96,12 @@ function MenuItemCard({ item, canteenId, canteenName, addItem }: any) {
         <Text style={styles.itemMeta}>⏱ {item.prepTimeMinutes} min</Text>
       </View>
       <View style={{ alignItems: 'flex-end', gap: 8 }}>
-        <Text style={styles.itemPrice}>₹{Number(item.price).toFixed(0)}</Text>
+        <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+          <TouchableOpacity onPress={() => onToggleFavorite(item.id)}>
+            <Text style={{ fontSize: 18, color: isFavorite ? '#e94560' : '#ccc' }}>{isFavorite ? '♥' : '♡'}</Text>
+          </TouchableOpacity>
+          <Text style={styles.itemPrice}>₹{Number(item.price).toFixed(0)}</Text>
+        </View>
         {item.isAvailable ? (
           <TouchableOpacity style={styles.addBtn} onPress={() => addItem(canteenId, canteenName, { menuItemId: item.id, name: item.name, price: Number(item.price), isVeg: item.isVeg })}>
             <Text style={styles.addBtnText}>+ Add</Text>

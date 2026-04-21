@@ -3,6 +3,7 @@ import {
   createCategory, updateCategory, deleteCategory,
   createMenuItem, updateMenuItem, deleteMenuItem,
   toggleItemAvailability, uploadItemImage,
+  getFavorites, addFavorite, removeFavorite,
 } from '../controllers/menu.controller';
 import { authenticate, requireVendor } from '../middleware/auth';
 import multer from 'multer';
@@ -21,5 +22,10 @@ router.put('/items/:id', authenticate, requireVendor, updateMenuItem);
 router.patch('/items/:id/availability', authenticate, requireVendor, toggleItemAvailability);
 router.delete('/items/:id', authenticate, requireVendor, deleteMenuItem);
 router.post('/items/:id/image', authenticate, requireVendor, upload.single('image'), uploadItemImage);
+
+// Favorites (authenticated students)
+router.get('/favorites', authenticate, getFavorites);
+router.post('/favorites/:menuItemId', authenticate, addFavorite);
+router.delete('/favorites/:menuItemId', authenticate, removeFavorite);
 
 export default router;

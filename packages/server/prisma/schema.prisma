@@ -13,6 +13,7 @@ datasource db {
 
 enum UserRole {
   STUDENT
+  FACULTY
   VENDOR
   ADMIN
 }
@@ -26,6 +27,7 @@ model User {
   role           UserRole  @default(STUDENT)
   avatarUrl      String?   @map("avatar_url")
   campus         String?   // "Bannerghatta", "Kengeri", "Central"
+  department     String?   // "MCA", "BBA", "BTECH", null for faculty/admin
   dietPreference String?   @map("diet_preference") // "veg", "nonveg", "jain", "noegg"
   fcmToken       String?   @map("fcm_token")
   createdAt      DateTime  @default(now()) @map("created_at")
@@ -61,13 +63,14 @@ model Canteen {
   createdAt    DateTime @default(now()) @map("created_at")
   updatedAt    DateTime @updatedAt @map("updated_at")
 
-  vendor        User?          @relation("VendorCanteen", fields: [vendorId], references: [id])
-  vendorId      String?        @unique @map("vendor_id")
+  vendor        User?             @relation("VendorCanteen", fields: [vendorId], references: [id])
+  vendorId      String?           @unique @map("vendor_id")
   categories    MenuCategory[]
   menuItems     MenuItem[]
   pickupSlots   PickupSlot[]
   orders        Order[]
   announcements Announcement[]
+  settlements   DailySettlement[]
 
   @@map("canteens")
 }
@@ -132,16 +135,17 @@ model MenuItem {
 // ============================================================
 
 model PickupSlot {
-  id             String   @id @default(uuid())
-  canteenId      String   @map("canteen_id")
-  date           DateTime @db.Date
-  startTime      String   @map("start_time") // "09:00"
-  endTime        String   @map("end_time")   // "09:15"
-  maxOrders      Int      @map("max_orders")
-  currentOrders  Int      @default(0) @map("current_orders")
-  walkInReserved Int      @default(5) @map("walk_in_reserved")
-  isOpen         Boolean  @default(true) @map("is_open")
-  createdAt      DateTime @default(now()) @map("created_at")
+  id              String   @id @default(uuid())
+  canteenId       String   @map("canteen_id")
+  date            DateTime @db.Date
+  startTime       String   @map("start_time") // "09:00"
+  endTime         String   @map("end_time")   // "09:15"
+  maxOrders       Int      @map("max_orders")
+  currentOrders   Int      @default(0) @map("current_orders")
+  walkInReserved  Int      @default(5) @map("walk_in_reserved")
+  facultyReserved Int      @default(3) @map("faculty_reserved") // slots reserved for faculty priority
+  isOpen          Boolean  @default(true) @map("is_open")
+  createdAt       DateTime @default(now()) @map("created_at")
 
   canteen Canteen @relation(fields: [canteenId], references: [id], onDelete: Cascade)
   orders  Order[]
@@ -174,9 +178,6 @@ enum PaymentStatus {
 
 enum PaymentMethod {
   WALLET
-  UPI
-  CARD
-  CASH
 }
 
 model Order {
@@ -187,7 +188,7 @@ model Order {
   slotId              String?        @map("slot_id")
   status              OrderStatus    @default(PENDING)
   paymentStatus       PaymentStatus  @default(PENDING) @map("payment_status")
-  paymentMethod       PaymentMethod? @map("payment_method")
+  paymentMethod       PaymentMethod  @default(WALLET) @map("payment_method")
   subtotal            Decimal        @db.Decimal(10, 2)
   platformFee         Decimal        @default(0) @db.Decimal(10, 2) @map("platform_fee")
   totalAmount         Decimal        @db.Decimal(10, 2) @map("total_amount")
@@ -273,6 +274,29 @@ model WalletTransaction {
 
   @@index([walletId, createdAt])
   @@map("wallet_transactions")
+}
+
+// ============================================================
+// DAILY SETTLEMENT (admin tracking of vendor payouts)
+// ============================================================
+
+model DailySettlement {
+  id          String    @id @default(uuid())
+  canteenId   String    @map("canteen_id")
+  date        DateTime  @db.Date
+  totalOrders Int       @map("total_orders")
+  grossAmount Decimal   @db.Decimal(10, 2) @map("gross_amount")   // total revenue before fee
+  platformFee Decimal   @db.Decimal(10, 2) @map("platform_fee")   // 2% Razorpay processing fee
+  netAmount   Decimal   @db.Decimal(10, 2) @map("net_amount")     // what vendor receives
+  isPaid      Boolean   @default(false) @map("is_paid")
+  paidAt      DateTime? @map("paid_at")
+  paidBy      String?   @map("paid_by")                           // admin userId who marked paid
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  canteen Canteen @relation(fields: [canteenId], references: [id])
+
+  @@unique([canteenId, date])
+  @@map("daily_settlements")
 }
 
 // ============================================================

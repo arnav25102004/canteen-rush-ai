@@ -205,3 +205,42 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Expo
+apps/mobile/.expo/
+
+# Node
+node_modules/
+apps/mobile/node_modules/
+packages/server/node_modules/
+
+# Build outputs
+apps/web/.next/
+apps/web/tsconfig.tsbuildinfo
+apps/mobile/android/
+apps/mobile/ios/
+packages/server/dist/
+packages/server/android/
+packages/server/app.json
+
+# Environment files — NEVER commit these
+.env
+.env.local
+.env.production
+.env.development
+packages/server/.env
+apps/web/.env.local
+apps/web/.env.production
+
+# Secrets and credentials
+ENV_VARS_PRODUCTION.md
+firebase-service-account.json
+**/firebase-service-account.json
+
+# Claude memory
+.claude/
+
+# Misc
+archive_old_version/
+explanation.md
+apps/mobile/package-lock.json

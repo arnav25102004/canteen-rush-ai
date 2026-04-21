@@ -56,3 +56,117 @@ export async function listAnnouncements(req: AuthRequest, res: Response) {
   return res.json({ announcements });
 }
 
+// ─── Settlements ──────────────────────────────────────────────────────────────
+
+export async function getSettlements(req: AuthRequest, res: Response) {
+  const { date, canteenId } = req.query as Record<string, string>;
+
+  // If date provided, compute settlements for that date on the fly if not yet created
+  if (date) {
+    const target = new Date(date);
+    const nextDay = new Date(target);
+    nextDay.setDate(nextDay.getDate() + 1);
+
+    const where = {
+      status: { notIn: ['CANCELLED' as any] },
+      paymentStatus: 'PAID' as any,
+      createdAt: { gte: target, lt: nextDay },
+      ...(canteenId ? { canteenId } : {}),
+    };
+
+    const orders = await prisma.order.findMany({
+      where,
+      select: { canteenId: true, totalAmount: true },
+    });
+
+    const byCanteen: Record<string, { totalOrders: number; grossAmount: number }> = {};
+    for (const o of orders) {
+      if (!byCanteen[o.canteenId]) byCanteen[o.canteenId] = { totalOrders: 0, grossAmount: 0 };
+      byCanteen[o.canteenId].totalOrders += 1;
+      byCanteen[o.canteenId].grossAmount += Number(o.totalAmount);
+    }
+
+    const canteens = await prisma.canteen.findMany({
+      where: canteenId ? { id: canteenId } : {},
+      select: { id: true, name: true },
+    });
+
+    const settlements = canteens.map((c) => {
+      const stats = byCanteen[c.id] || { totalOrders: 0, grossAmount: 0 };
+      const platformFee = Math.round(stats.grossAmount * 0.02 * 100) / 100;
+      const netAmount = Math.round((stats.grossAmount - platformFee) * 100) / 100;
+      return { canteenId: c.id, canteenName: c.name, date, totalOrders: stats.totalOrders, grossAmount: stats.grossAmount, platformFee, netAmount };
+    });
+
+    // Upsert into DB
+    for (const s of settlements) {
+      if (s.totalOrders > 0) {
+        await prisma.dailySettlement.upsert({
+          where: { canteenId_date: { canteenId: s.canteenId, date: target } },
+          update: { totalOrders: s.totalOrders, grossAmount: s.grossAmount, platformFee: s.platformFee, netAmount: s.netAmount },
+          create: { canteenId: s.canteenId, date: target, totalOrders: s.totalOrders, grossAmount: s.grossAmount, platformFee: s.platformFee, netAmount: s.netAmount },
+        });
+      }
+    }
+
+    return res.json({ settlements });
+  }
+
+  // No date: return stored settlements
+  const stored = await prisma.dailySettlement.findMany({
+    where: canteenId ? { canteenId } : {},
+    orderBy: { date: 'desc' },
+    include: { canteen: { select: { name: true } } },
+    take: 90,
+  });
+  return res.json({ settlements: stored });
+}
+
+export async function markSettlementPaid(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const settlement = await prisma.dailySettlement.findUnique({ where: { id } });
+  if (!settlement) return res.status(404).json({ error: 'Settlement not found' });
+  if (settlement.isPaid) return res.status(400).json({ error: 'Already marked as paid' });
+
+  const updated = await prisma.dailySettlement.update({
+    where: { id },
+    data: { isPaid: true, paidAt: new Date(), paidBy: req.user!.id },
+  });
+  return res.json({ settlement: updated });
+}
+
+// ─── User management ──────────────────────────────────────────────────────────
+
+export async function listUsers(req: AuthRequest, res: Response) {
+  const { role, page = '1', limit = '50' } = req.query as Record<string, string>;
+  const skip = (Number(page) - 1) * Number(limit);
+
+  const where = role ? { role: role as UserRole } : {};
+  const [users, total] = await Promise.all([
+    prisma.user.findMany({
+      where,
+      select: { id: true, name: true, email: true, role: true, department: true, campus: true, createdAt: true },
+      orderBy: { createdAt: 'desc' },
+      skip,
+      take: Number(limit),
+    }),
+    prisma.user.count({ where }),
+  ]);
+  return res.json({ users, total });
+}
+
+export async function updateUserRole(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const parse = z.object({ role: z.nativeEnum(UserRole) }).safeParse(req.body);
+  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+
+  if (id === req.user!.id) return res.status(400).json({ error: 'Cannot change your own role' });
+
+  const user = await prisma.user.update({
+    where: { id },
+    data: { role: parse.data.role },
+    select: { id: true, name: true, email: true, role: true },
+  });
+  return res.json({ user });
+}
+

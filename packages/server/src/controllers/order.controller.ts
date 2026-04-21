@@ -6,7 +6,7 @@ import { verifyQRToken, generateQRCodeDataURL } from '../services/qr.service';
 import { sendOrderNotification } from '../services/notification.service';
 import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '../utils/helpers';
 import { z } from 'zod';
-import { PaymentMethod, OrderStatus, UserRole } from '@prisma/client';
+import { OrderStatus, UserRole } from '@prisma/client';
 
 const ACTIVE_STATUSES = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
 
@@ -19,7 +19,6 @@ const placeOrderSchema = z.object({
     customizations: z.record(z.any()).optional(),
     notes: z.string().optional(),
   })).min(1),
-  paymentMethod: z.nativeEnum(PaymentMethod),
   specialInstructions: z.string().optional(),
 });
 
@@ -38,8 +37,29 @@ export async function createOrder(req: AuthRequest, res: Response) {
     const order = await placeOrder({ userId: req.user!.id, ...v.data }, req.io);
     return res.status(201).json({ order });
   } catch (err: unknown) {
-    return res.status(400).json({ error: (err as Error).message });
+    const msg = (err as Error).message;
+    if (msg.startsWith('INSUFFICIENT_BALANCE:')) {
+      const [, balance, required] = msg.split(':');
+      return res.status(400).json({
+        error: 'Insufficient wallet balance. Please recharge.',
+        currentBalance: Number(balance),
+        required: Number(required),
+      });
+    }
+    return res.status(400).json({ error: msg });
   }
+}
+
+export async function getLastOrder(req: AuthRequest, res: Response) {
+  const order = await prisma.order.findFirst({
+    where: { userId: req.user!.id, status: { notIn: [OrderStatus.CANCELLED] } },
+    orderBy: { createdAt: 'desc' },
+    include: {
+      canteen: { select: { id: true, name: true, imageUrl: true, isActive: true } },
+      items: { include: { menuItem: { select: { id: true, name: true, imageUrl: true, price: true, isAvailable: true, isVeg: true } } } },
+    },
+  });
+  return res.json({ order });
 }
 
 export async function getMyOrders(req: AuthRequest, res: Response) {
@@ -205,6 +225,43 @@ export async function scanQR(req: AuthRequest, res: Response) {
   emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.PICKED_UP });
 
   return res.json({ success: true, order: updated });
+}
+
+export async function respondToOrder(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const { action, rejectReason } = req.body as { action: 'ACCEPT' | 'REJECT'; rejectReason?: string };
+
+  if (!['ACCEPT', 'REJECT'].includes(action)) {
+    return res.status(400).json({ error: 'action must be ACCEPT or REJECT' });
+  }
+
+  const order = await prisma.order.findUnique({
+    where: { id },
+    select: { status: true, canteenId: true, userId: true, orderNumber: true },
+  });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.canteenId !== req.user!.canteenId) return res.status(403).json({ error: 'Forbidden' });
+  if (order.status !== OrderStatus.CONFIRMED) {
+    return res.status(400).json({ error: 'Can only respond to CONFIRMED orders' });
+  }
+
+  if (action === 'ACCEPT') {
+    const updated = await prisma.order.update({
+      where: { id },
+      data: { status: OrderStatus.ACCEPTED },
+    });
+    emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.ACCEPTED });
+    await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.ACCEPTED);
+    return res.json({ order: updated });
+  }
+
+  // REJECT — cancel and refund wallet
+  try {
+    await cancelOrder(id, 'vendor', rejectReason || 'Rejected by vendor', req.io);
+    return res.json({ success: true });
+  } catch (err: unknown) {
+    return res.status(400).json({ error: (err as Error).message });
+  }
 }
 
 export async function getPrepSheet(req: AuthRequest, res: Response) {
