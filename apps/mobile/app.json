@@ -28,8 +28,7 @@
     },
     "plugins": [
       "expo-router",
-      "expo-camera",
-      "expo-web-browser"
+      "expo-camera"
     ],
     "experiments": {
       "typedRoutes": true

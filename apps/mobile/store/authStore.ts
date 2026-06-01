@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
+import { auth } from '../firebaseConfig';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 
 const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
 
@@ -24,13 +26,24 @@ interface AuthStore {
   logout: () => Promise<void>;
 }
 
-/** Apply stored token to all future axios requests */
 function applyToken(token: string | null) {
   if (token) {
     axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
   } else {
     delete axios.defaults.headers.common['Authorization'];
   }
+}
+
+function mapUser(dataUser: any): AppUser {
+  return {
+    id: dataUser.id,
+    name: dataUser.name,
+    email: dataUser.email,
+    role: dataUser.role,
+    canteenId: dataUser.vendorCanteen?.id,
+    campus: dataUser.campus,
+    dietPreference: dataUser.dietPreference,
+  };
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
@@ -40,53 +53,57 @@ export const useAuthStore = create<AuthStore>((set) => ({
 
   loadFromStorage: async () => {
     try {
-      const [rawUser, token] = await AsyncStorage.multiGet(['user', 'auth_token']);
+      const [rawUser, rawToken] = await AsyncStorage.multiGet(['user', 'auth_token']);
       const user = rawUser[1] ? (JSON.parse(rawUser[1]) as AppUser) : null;
-      const tok = token[1] ?? null;
-      applyToken(tok);
-      set({ user, token: tok, isLoaded: true });
+      const token = rawToken[1] ?? null;
+      applyToken(token);
+      set({ user, token, isLoaded: true });
     } catch {
       set({ user: null, token: null, isLoaded: true });
     }
   },
 
-  login: async (email, _password) => {
-    // Dev mode: backend creates/finds user and returns a mock token
-    const { data } = await axios.post(`${API_URL}/api/auth/dev-login`, { email });
-    const user: AppUser = {
-      id: data.user.id,
-      name: data.user.name,
-      email: data.user.email,
-      role: data.user.role,
-      canteenId: data.user.vendorCanteen?.id,
-      campus: data.user.campus,
-      dietPreference: data.user.dietPreference,
-    };
-    applyToken(data.token);
-    await AsyncStorage.multiSet([
-      ['user', JSON.stringify(user)],
-      ['auth_token', data.token],
-    ]);
-    set({ user, token: data.token });
+  login: async (email, password) => {
+    const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    const token = await userCredential.user.getIdToken();
+    applyToken(token);
+
+    try {
+      const { data } = await axios.get(`${API_URL}/api/auth/me`);
+      const user = mapUser(data.user);
+      await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
+      set({ user, token });
+    } catch (error: any) {
+      if (error.response?.status === 404 || error.response?.status === 401) {
+        const { data } = await axios.post(`${API_URL}/api/auth/register`, {
+          firebaseToken: token,
+          name: email.split('@')[0],
+          email,
+          role: 'STUDENT',
+        });
+        const user = mapUser(data.user);
+        await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
+        set({ user, token });
+      } else {
+        throw error;
+      }
+    }
   },
 
-  register: async (name, email, _password) => {
-    const { data } = await axios.post(`${API_URL}/api/auth/dev-login`, { email, name });
-    const user: AppUser = {
-      id: data.user.id,
-      name: data.user.name,
-      email: data.user.email,
-      role: data.user.role,
-      canteenId: data.user.vendorCanteen?.id,
-      campus: data.user.campus,
-      dietPreference: data.user.dietPreference,
-    };
-    applyToken(data.token);
-    await AsyncStorage.multiSet([
-      ['user', JSON.stringify(user)],
-      ['auth_token', data.token],
-    ]);
-    set({ user, token: data.token });
+  register: async (name, email, password) => {
+    const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+    const token = await userCredential.user.getIdToken();
+    applyToken(token);
+
+    const { data } = await axios.post(`${API_URL}/api/auth/register`, {
+      firebaseToken: token,
+      name,
+      email,
+      role: 'STUDENT',
+    });
+    const user = mapUser(data.user);
+    await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
+    set({ user, token });
   },
 
   logout: async () => {

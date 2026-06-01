@@ -6,18 +6,20 @@ import {
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 
-export default function LoginScreen() {
-  const { login } = useAuthStore();
+export default function RegisterScreen() {
+  const { register } = useAuthStore();
   const router = useRouter();
+  const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
 
-  async function handleLogin() {
-    if (!email || !password) { Alert.alert('Fill in all fields'); return; }
+  async function handleRegister() {
+    if (!name || !email || !password) { Alert.alert('Fill in all fields'); return; }
+    if (password.length < 6) { Alert.alert('Password must be at least 6 characters'); return; }
     setLoading(true);
     try {
-      await login(email, password);
+      await register(name, email, password);
       router.replace('/(tabs)/home');
     } catch (e: any) {
       const msg = e?.response?.data?.error || e?.message || 'Something went wrong';
@@ -33,10 +35,14 @@ export default function LoginScreen() {
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
       <Text style={styles.logo}>ChristEats</Text>
-      <Text style={styles.subtitle}>Christ University Virtual Canteen</Text>
+      <Text style={styles.subtitle}>Create your account</Text>
       <Text style={styles.hint}>Use your @christuniversity.in email</Text>
 
       <View style={styles.form}>
+        <TextInput
+          style={styles.input} placeholder="Full Name" value={name}
+          onChangeText={setName} placeholderTextColor="#aaa"
+        />
         <TextInput
           style={styles.input} placeholder="Email" value={email}
           onChangeText={setEmail} keyboardType="email-address"
@@ -46,13 +52,13 @@ export default function LoginScreen() {
           style={styles.input} placeholder="Password" value={password}
           onChangeText={setPassword} secureTextEntry placeholderTextColor="#aaa"
         />
-        <TouchableOpacity style={[styles.btn, loading && styles.btnDisabled]} onPress={handleLogin} disabled={loading}>
-          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Sign In</Text>}
+        <TouchableOpacity style={[styles.btn, loading && styles.btnDisabled]} onPress={handleRegister} disabled={loading}>
+          {loading ? <ActivityIndicator color="#fff" /> : <Text style={styles.btnText}>Register</Text>}
         </TouchableOpacity>
       </View>
 
-      <TouchableOpacity onPress={() => router.push('/(auth)/register')} style={styles.registerLink}>
-        <Text style={styles.registerText}>Don't have an account? <Text style={styles.registerBold}>Register</Text></Text>
+      <TouchableOpacity onPress={() => router.back()} style={styles.loginLink}>
+        <Text style={styles.loginText}>Already have an account? <Text style={styles.loginBold}>Sign In</Text></Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>
   );
@@ -68,7 +74,7 @@ const styles = StyleSheet.create({
   btn: { backgroundColor: '#e94560', borderRadius: 12, padding: 16, alignItems: 'center', marginTop: 4 },
   btnDisabled: { opacity: 0.5 },
   btnText: { color: '#fff', fontWeight: '600', fontSize: 16 },
-  registerLink: { marginTop: 24, alignItems: 'center' },
-  registerText: { color: '#ffffff60', fontSize: 14 },
-  registerBold: { color: '#e94560', fontWeight: '600' },
+  loginLink: { marginTop: 24, alignItems: 'center' },
+  loginText: { color: '#ffffff60', fontSize: 14 },
+  loginBold: { color: '#e94560', fontWeight: '600' },
 });

@@ -16,6 +16,7 @@ eggs/
 .eggs/
 lib/
 lib64/
+!apps/web/lib/
 parts/
 sdist/
 var/
@@ -244,3 +245,10 @@ firebase-service-account.json
 archive_old_version/
 explanation.md
 apps/mobile/package-lock.json
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+*.tsbuildinfo

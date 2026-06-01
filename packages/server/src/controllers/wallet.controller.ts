@@ -44,7 +44,7 @@ export async function initiateRecharge(req: AuthRequest, res: Response) {
     const order = await createRazorpayOrder(Number(amount), receipt);
     return res.json({ razorpayOrderId: order.id, amount, currency: 'INR', keyId: process.env.RAZORPAY_KEY_ID });
   } catch (err: any) {
-    console.error('Wallet recharge init error:', JSON.stringify(err, null, 2));
+    console.error('Wallet recharge error:', err?.error?.description || err?.message || 'Unknown error');
     return res.status(500).json({ error: 'Could not create payment order. Check Razorpay keys.' });
   }
 }

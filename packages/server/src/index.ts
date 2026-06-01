@@ -9,9 +9,6 @@ import dotenv from 'dotenv';
 import path from 'path';
 
 dotenv.config({ path: path.resolve(__dirname, '../.env') });
-console.log('Looking for .env at:', path.resolve(__dirname, '../.env'));
-console.log('RAZORPAY_KEY_ID:', process.env.RAZORPAY_KEY_ID ? 'LOADED ✅' : 'MISSING ❌');
-console.log('All env keys:', Object.keys(process.env).filter(k => k.includes('RAZORPAY')));
 
 import { prisma } from './config/database';
 import { redis } from './config/redis';
@@ -28,6 +25,7 @@ import paymentRoutes from './routes/payment.routes';
 import notificationRoutes from './routes/notification.routes';
 import adminRoutes from './routes/admin.routes';
 import analyticsRoutes from './routes/analytics.routes';
+import { globalErrorHandler } from './middleware/errorHandler';
 
 // Jobs
 import { startSlotGenerationJob } from './jobs/slotGeneration.cron';
@@ -93,12 +91,7 @@ app.use('/api/vendor/analytics', analyticsRoutes);
 setupSocketIO(io);
 
 // Global error handler
-app.use((err: any, _req: express.Request, res: express.Response, _next: express.NextFunction) => {
-  console.error(err.stack);
-  const status = err.status || err.statusCode || 500;
-  const message = err.message || 'Internal Server Error';
-  res.status(status).json({ error: message });
-});
+app.use(globalErrorHandler);
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 

@@ -86,8 +86,8 @@ export async function devLogin(req: Request, res: Response) {
 
 const registerSchema = z.object({
   firebaseToken: z.string(),
-  name: z.string().min(2),
-  email: z.string().email(),
+  name: z.string().min(2).optional(),
+  email: z.string().email().optional(),
   role: z.nativeEnum(UserRole).optional().default(UserRole.STUDENT),
   campus: z.string().optional(),
   phone: z.string().optional(),
@@ -105,16 +105,20 @@ export async function register(req: Request, res: Response) {
   const parse = registerSchema.safeParse(req.body);
   if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
 
-  const { firebaseToken, name, email, role, campus, phone } = parse.data;
+  const { firebaseToken, role, campus, phone } = parse.data;
+
+  const decoded = await verifyFirebaseToken(firebaseToken);
+  if (!decoded) return res.status(401).json({ error: 'Invalid Firebase token' });
+
+  // Fall back to values from the Firebase token (covers Google Sign-In)
+  const email: string = parse.data.email || decoded.email || '';
+  const name: string = parse.data.name || (decoded as any).name || email.split('@')[0];
 
   if (!isChristEmail(email)) {
     return res.status(400).json({
       error: 'Please use your Christ University email address to register.',
     });
   }
-
-  const decoded = await verifyFirebaseToken(firebaseToken);
-  if (!decoded) return res.status(401).json({ error: 'Invalid Firebase token' });
 
   const existing = await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } });
   if (existing) return res.status(409).json({ error: 'User already registered' });
@@ -124,7 +128,7 @@ export async function register(req: Request, res: Response) {
   const user = await prisma.user.create({
     data: {
       firebaseUid: decoded.uid,
-      email: email || decoded.email || '',
+      email,
       name,
       role,
       campus,
