@@ -3,8 +3,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { auth } from '../firebaseConfig';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
-
-const API_URL = process.env.EXPO_PUBLIC_API_URL || 'http://localhost:3001';
+import { CONFIG } from '../config';
 
 export interface AppUser {
   id: string;
@@ -69,13 +68,13 @@ export const useAuthStore = create<AuthStore>((set) => ({
     applyToken(token);
 
     try {
-      const { data } = await axios.get(`${API_URL}/api/auth/me`);
+      const { data } = await axios.get(`${CONFIG.API_URL}/auth/me`);
       const user = mapUser(data.user);
       await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
       set({ user, token });
     } catch (error: any) {
       if (error.response?.status === 404 || error.response?.status === 401) {
-        const { data } = await axios.post(`${API_URL}/api/auth/register`, {
+        const { data } = await axios.post(`${CONFIG.API_URL}/auth/register`, {
           firebaseToken: token,
           name: email.split('@')[0],
           email,
@@ -95,7 +94,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
     const token = await userCredential.user.getIdToken();
     applyToken(token);
 
-    const { data } = await axios.post(`${API_URL}/api/auth/register`, {
+    const { data } = await axios.post(`${CONFIG.API_URL}/auth/register`, {
       firebaseToken: token,
       name,
       email,
