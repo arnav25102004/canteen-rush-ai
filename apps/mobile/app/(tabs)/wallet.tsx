@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, Alert, TextInput, Modal, StyleSheet, ActivityIndicator } from 'react-native';
-import RazorpayCheckout from 'react-native-razorpay';
+import { openRazorpayCheckout } from '../../components/RazorpayPayment';
 import api from '../../services/api';
 import { useAuthStore } from '../../store/authStore';
 

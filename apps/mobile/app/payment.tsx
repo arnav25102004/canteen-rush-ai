@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { View, Text, ActivityIndicator, StyleSheet, TouchableOpacity } from 'react-native';
 import { useRouter, useLocalSearchParams } from 'expo-router';
-import RazorpayCheckout from 'react-native-razorpay';
+import { openRazorpayCheckout } from '../components/RazorpayPayment';
 import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
 
@@ -27,33 +27,23 @@ export default function PaymentScreen() {
   }, []);
 
   async function openRazorpay() {
-    const { razorpayOrderId, amount, keyId, userName, userEmail } = params;
-
-    const options = {
-      description: 'ChristEats Canteen Order',
-      currency: 'INR',
-      key: keyId,
-      amount: String(Math.round(Number(amount) * 100)), // rupees → paise
-      order_id: razorpayOrderId,
-      name: 'ChristEats',
-      prefill: {
-        email: userEmail || '',
-        contact: '',
-        name: userName || 'Student',
-      },
-      theme: { color: '#E94560' },
-    };
+    const { razorpayOrderId, amount, userName, userEmail } = params;
 
     try {
-      const paymentData = await (RazorpayCheckout as any).open(options);
+      const paymentData = await openRazorpayCheckout({
+        orderId: razorpayOrderId,
+        amount: Number(amount),
+        email: userEmail || '',
+        name: userName || 'Student',
+        description: 'ChristEats Canteen Order',
+      });
       await handlePaymentSuccess(paymentData);
     } catch (error: any) {
-      // error.code === 0 means user cancelled
-      if (error?.code === 0) {
+      if (error?.message === 'PAYMENT_CANCELLED') {
         router.back();
       } else {
         setStatus('failed');
-        setMessage(error?.description || 'Payment failed. Please try again.');
+        setMessage(error?.message || 'Payment failed. Please try again.');
       }
     }
   }

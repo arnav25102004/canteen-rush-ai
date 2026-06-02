@@ -1,11 +1,12 @@
 {
   "expo": {
     "name": "ChristEats",
-    "slug": "christ-eats",
+    "slug": "christeats",
     "version": "1.0.0",
-    "scheme": "christeats",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
+    "scheme": "christeats",
+    "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
       "resizeMode": "contain",
@@ -22,8 +23,7 @@
       },
       "package": "com.christuniversity.eats",
       "permissions": [
-        "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.CAMERA"
       ]
     },
     "plugins": [
