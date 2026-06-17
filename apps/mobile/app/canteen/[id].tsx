@@ -14,14 +14,20 @@ export default function CanteenMenuScreen() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [popular, setPopular] = useState<MenuItem[]>([]);
   const [canteen, setCanteen] = useState<any>(null);
-  const [activeCategory, setActiveCategory] = useState('Popular');
+  const [activeCategory, setActiveCategory] = useState('');
   const [favorites, setFavorites] = useState<Set<string>>(new Set());
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     Promise.all([
-      api.get(`/canteens/${id}`).then(r => setCanteen(r.data.canteen)),
-      api.get(`/canteens/${id}/menu`).then(r => { setCategories(r.data.categories); setPopular(r.data.popular); }),
+      api.get(`/canteens/${id}`).then(r => setCanteen(r.data.canteen)).catch(() => null),
+      api.get(`/canteens/${id}/menu`).then(r => {
+        const cats: Category[] = r.data.categories || [];
+        const pop: MenuItem[] = r.data.popular || [];
+        setCategories(cats);
+        setPopular(pop);
+        setActiveCategory(pop.length > 0 ? 'Popular' : cats[0]?.name || '');
+      }).catch(() => null),
       api.get('/menu/favorites').then(r => setFavorites(new Set((r.data.favorites as any[]).map((f: any) => f.id)))).catch(() => null),
     ]).finally(() => setLoading(false));
   }, [id]);

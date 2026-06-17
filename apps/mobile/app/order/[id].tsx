@@ -45,6 +45,17 @@ export default function OrderTrackingScreen() {
         {order.slot && <Text style={styles.slotText}>📍 Pickup slot: {order.slot.startTime}–{order.slot.endTime}</Text>}
       </View>
 
+      {/* Pay at counter banner for CASH orders */}
+      {order.paymentMethod === 'CASH' && order.status !== 'PICKED_UP' && (
+        <View style={styles.cashBanner}>
+          <Text style={styles.cashIcon}>💵</Text>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.cashTitle}>Pay ₹{Number(order.totalAmount).toFixed(0)} at the counter</Text>
+            <Text style={styles.cashSub}>Show this screen when you pick up your order</Text>
+          </View>
+        </View>
+      )}
+
       {/* Status Stepper */}
       <View style={styles.stepper}>
         {STEPS.filter(s => s !== 'PICKED_UP' || order.status === 'PICKED_UP').map((step, i) => {
@@ -99,6 +110,10 @@ export default function OrderTrackingScreen() {
 
 const styles = StyleSheet.create({
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
+  cashBanner: { backgroundColor: '#f0fdf4', borderRadius: 14, padding: 14, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#bbf7d0' },
+  cashIcon: { fontSize: 28 },
+  cashTitle: { fontSize: 14, fontWeight: '700', color: '#15803d' },
+  cashSub: { fontSize: 12, color: '#166534', marginTop: 2 },
   headerCard: { backgroundColor: '#1a1a2e', borderRadius: 16, padding: 20, marginBottom: 16 },
   orderNum: { color: '#ffffff80', fontSize: 13, marginBottom: 4 },
   canteenName: { color: '#fff', fontSize: 20, fontWeight: '700' },
