@@ -4,9 +4,7 @@ import { Stack, useRouter, useSegments } from 'expo-router';
 import { useAuthStore } from '../store/authStore';
 
 export default function RootLayout() {
-  console.log('[RootLayout] rendered');
-
-  const { user, isLoaded, loadFromStorage } = useAuthStore();
+  const { user, institution, isLoaded, loadFromStorage } = useAuthStore();
   const router = useRouter();
   const segments = useSegments();
 
@@ -16,15 +14,22 @@ export default function RootLayout() {
 
   useEffect(() => {
     if (!isLoaded) return;
-    console.log('[RootLayout] auth resolved, user:', !!user, 'segments:', segments[0]);
     const inAuth = segments[0] === '(auth)';
-    if (!user && !inAuth) router.replace('/(auth)/login');
-    else if (user && inAuth) router.replace('/(tabs)/home');
-  }, [user, isLoaded, segments]);
+    const inSelectInstitution = segments[0] === 'select-institution';
+
+    if (!institution && !inSelectInstitution) {
+      router.replace('/select-institution');
+    } else if (institution && !user && !inAuth) {
+      router.replace('/(auth)/login');
+    } else if (institution && user && (inAuth || inSelectInstitution)) {
+      router.replace('/(tabs)/home');
+    }
+  }, [user, institution, isLoaded, segments]);
 
   return (
     <View style={{ flex: 1 }}>
       <Stack screenOptions={{ headerShown: false }}>
+        <Stack.Screen name="select-institution" />
         <Stack.Screen name="(auth)" />
         <Stack.Screen name="(tabs)" />
         <Stack.Screen name="canteen/[id]" options={{ headerShown: true, title: '' }} />
