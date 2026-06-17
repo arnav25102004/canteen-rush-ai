@@ -9,7 +9,7 @@ export default function CanteensPage() {
 
   useEffect(() => {
     Promise.all([
-      api.get('/canteens').then(r => setCanteens(r.data.canteens || [])),
+      api.get('/canteens?includeInactive=true').then(r => setCanteens(r.data.canteens || [])),
       api.get('/admin/vendors').then(r => setVendors(r.data.vendors || [])),
     ]).catch(console.error);
   }, []);
@@ -20,7 +20,7 @@ export default function CanteensPage() {
     } else {
       await api.put(`/canteens/${id}`, { isActive: true });
     }
-    const { data } = await api.get('/canteens');
+    const { data } = await api.get('/canteens?includeInactive=true');
     setCanteens(data.canteens || []);
   }
 

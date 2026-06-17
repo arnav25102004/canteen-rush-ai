@@ -5,6 +5,7 @@ import api from '../../../lib/api';
 
 interface Order {
   id: string; orderNumber: string; status: string; totalAmount: number; createdAt: string;
+  paymentStatus: string; upiOrderNote?: string;
   specialInstructions?: string;
   user: { name: string; phone?: string };
   items: { quantity: number; menuItem: { name: string }; notes?: string }[];
@@ -27,19 +28,33 @@ const nextAction: Record<string, { label: string; next: string }> = {
 export default function OrdersPage() {
   const [orders, setOrders] = useState<Order[]>([]);
   const [selectedStatus, setSelectedStatus] = useState('');
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [error, setError] = useState('');
+  const [date, setDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
 
   const load = useCallback(async () => {
-    const params = new URLSearchParams({ date });
-    if (selectedStatus) params.set('status', selectedStatus);
-    const { data } = await api.get(`/orders/vendor/list?${params}`);
-    setOrders(data.orders || []);
+    setError('');
+    try {
+      const params = new URLSearchParams({ date });
+      if (selectedStatus) params.set('status', selectedStatus);
+      const { data } = await api.get(`/orders/vendor/list?${params}`);
+      setOrders(data.orders || []);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || e.message || 'Failed to load orders');
+    }
   }, [date, selectedStatus]);
 
   useEffect(() => { load(); }, [load]);
 
   async function updateStatus(id: string, status: string) {
     await api.patch(`/orders/vendor/${id}/status`, { status });
+    load();
+  }
+
+  async function verifyPayment(id: string, confirmed: boolean) {
+    await api.patch(`/orders/vendor/${id}/verify-payment`, { confirmed });
     load();
   }
 
@@ -80,6 +95,12 @@ export default function OrdersPage() {
           </div>
         </div>
 
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-xl p-4 mb-4 text-red-700 text-sm font-medium">
+            ⚠️ {error}
+          </div>
+        )}
+
         {Object.entries(grouped).length === 0 ? (
           <div className="bg-white rounded-xl p-12 text-center text-gray-400 shadow-sm">No orders found</div>
         ) : (
@@ -92,6 +113,28 @@ export default function OrdersPage() {
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                 {slotOrders.map((order) => (
                   <div key={order.id} className={`bg-white rounded-xl border-l-4 p-4 shadow-sm ${statusColors[order.status] || ''}`}>
+                    {/* Payment verification banner */}
+                    {order.paymentStatus === 'PENDING_VERIFICATION' && (
+                      <div className="mb-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
+                        <p className="text-sm font-bold text-amber-800 mb-1">🟡 Student says they've paid ₹{Number(order.totalAmount).toFixed(0)}</p>
+                        {order.upiOrderNote && (
+                          <p className="text-xs text-amber-700 mb-2">Check your GPay/PhonePe for: <strong>{order.upiOrderNote}</strong></p>
+                        )}
+                        <div className="flex gap-2">
+                          <button onClick={() => verifyPayment(order.id, true)}
+                            className="flex-1 text-xs bg-green-600 text-white py-2 rounded-lg font-bold hover:bg-green-700">
+                            ✅ Yes, Received
+                          </button>
+                          <button onClick={() => verifyPayment(order.id, false)}
+                            className="flex-1 text-xs bg-red-500 text-white py-2 rounded-lg font-bold hover:bg-red-600">
+                            ❌ Not Received
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                    {order.paymentStatus === 'AWAITING_PAYMENT' && (
+                      <div className="mb-2 text-xs text-amber-600 font-medium">⏳ Waiting for student to pay</div>
+                    )}
                     <div className="flex justify-between items-start mb-2">
                       <div>
                         <p className="font-semibold text-sm">{order.orderNumber}</p>

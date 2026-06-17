@@ -6,6 +6,7 @@ import { io, Socket } from 'socket.io-client';
 
 interface Order {
   id: string; orderNumber: string; status: string; totalAmount: number;
+  paymentStatus: string; upiOrderNote?: string;
   createdAt: string;
   user: { name: string };
   items: { quantity: number; menuItem: { name: string } }[];
@@ -46,6 +47,11 @@ export default function VendorDashboard() {
 
   async function markStatus(orderId: string, status: string) {
     await api.patch(`/orders/vendor/${orderId}/status`, { status });
+    loadData();
+  }
+
+  async function verifyPayment(orderId: string, confirmed: boolean) {
+    await api.patch(`/orders/vendor/${orderId}/verify-payment`, { confirmed });
     loadData();
   }
 
@@ -95,27 +101,61 @@ export default function VendorDashboard() {
               <p className="p-8 text-center text-gray-400">No active orders</p>
             ) : (
               liveOrders.map((order) => (
-                <div key={order.id} className="p-4 flex items-center gap-4">
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <span className="font-medium">{order.orderNumber}</span>
-                      <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor[order.status] || 'bg-gray-100'}`}>
-                        {order.status}
-                      </span>
+                <div key={order.id} className="p-4">
+                  {/* Payment verification banner */}
+                  {order.paymentStatus === 'PENDING_VERIFICATION' && (
+                    <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
+                      <p className="text-sm font-semibold text-amber-800 mb-1">
+                        🟡 Student claims payment sent — ₹{Number(order.totalAmount).toFixed(0)}
+                      </p>
+                      {order.upiOrderNote && (
+                        <p className="text-xs text-amber-700 mb-2">Check GPay for: <strong>{order.upiOrderNote}</strong></p>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          onClick={() => verifyPayment(order.id, true)}
+                          className="flex-1 text-sm bg-green-500 text-white py-1.5 rounded-lg font-medium hover:bg-green-600"
+                        >
+                          ✅ Received
+                        </button>
+                        <button
+                          onClick={() => verifyPayment(order.id, false)}
+                          className="flex-1 text-sm bg-red-500 text-white py-1.5 rounded-lg font-medium hover:bg-red-600"
+                        >
+                          ❌ Not Received
+                        </button>
+                      </div>
                     </div>
-                    <p className="text-sm text-gray-500">{order.user?.name} • {order.items?.map(i => `${i.menuItem.name} ×${i.quantity}`).join(', ')}</p>
-                    {order.slot && <p className="text-xs text-gray-400">Slot: {order.slot.startTime}–{order.slot.endTime}</p>}
-                  </div>
-                  <div className="text-right">
-                    <p className="font-semibold">₹{Number(order.totalAmount).toFixed(0)}</p>
-                    {nextAction[order.status] && (
-                      <button
-                        onClick={() => markStatus(order.id, nextAction[order.status].next)}
-                        className={`mt-1 text-xs text-white px-3 py-1 rounded-lg ${nextAction[order.status].color}`}
-                      >
-                        {nextAction[order.status].label}
-                      </button>
-                    )}
+                  )}
+
+                  <div className="flex items-center gap-4">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2 mb-1">
+                        <span className="font-medium">{order.orderNumber}</span>
+                        <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor[order.status] || 'bg-gray-100'}`}>
+                          {order.status}
+                        </span>
+                        {order.paymentStatus === 'AWAITING_PAYMENT' && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">⏳ Awaiting Payment</span>
+                        )}
+                        {order.paymentStatus === 'VERIFIED' && (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">✅ Paid</span>
+                        )}
+                      </div>
+                      <p className="text-sm text-gray-500">{order.user?.name} • {order.items?.map(i => `${i.menuItem.name} ×${i.quantity}`).join(', ')}</p>
+                      {order.slot && <p className="text-xs text-gray-400">Slot: {order.slot.startTime}–{order.slot.endTime}</p>}
+                    </div>
+                    <div className="text-right">
+                      <p className="font-semibold">₹{Number(order.totalAmount).toFixed(0)}</p>
+                      {nextAction[order.status] && (
+                        <button
+                          onClick={() => markStatus(order.id, nextAction[order.status].next)}
+                          className={`mt-1 text-xs text-white px-3 py-1 rounded-lg ${nextAction[order.status].color}`}
+                        >
+                          {nextAction[order.status].label}
+                        </button>
+                      )}
+                    </div>
                   </div>
                 </div>
               ))
