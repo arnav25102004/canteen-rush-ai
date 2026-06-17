@@ -2,6 +2,8 @@ import { prisma } from '../config/database';
 import { redis, KEYS, incrOrderSeq } from '../config/redis';
 import { generateQRToken } from './qr.service';
 import { sendOrderNotification } from './notification.service';
+import { generateUpiDeepLink } from '../utils/upi';
+import { validatePointsRedemption, redeemPoints } from './loyalty.service';
 import { OrderStatus } from '@prisma/client';
 
 interface PlaceOrderInput {
@@ -10,16 +12,30 @@ interface PlaceOrderInput {
   slotId?: string;
   items: Array<{ menuItemId: string; quantity: number; customizations?: Record<string, unknown>; notes?: string }>;
   specialInstructions?: string;
+  pointsToRedeem?: number;
 }
 
-export async function generateOrderNumber(canteenId: string): Promise<string> {
+export interface PlaceOrderResult {
+  order: Record<string, unknown>;
+  upiDeepLink: string | null;
+  upiAmount: number;
+  pointsDiscount: number;
+  walletDeduction: number;
+  subtotal: number;
+}
+
+export async function generateOrderNumber(_canteenId: string): Promise<string> {
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const seq = await incrOrderSeq(today);
-  return `CC-${today}-${String(seq).padStart(4, '0')}`;
+  try {
+    const seq = await incrOrderSeq(today);
+    return `CC-${today}-${String(seq).padStart(4, '0')}`;
+  } catch {
+    return `CC-${today}-${Date.now().toString().slice(-4)}`;
+  }
 }
 
-export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
-  const { userId, canteenId, slotId, items, specialInstructions } = input;
+export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<PlaceOrderResult> {
+  const { userId, canteenId, slotId, items, specialInstructions, pointsToRedeem = 0 } = input;
 
   // Validate items belong to this canteen and are available
   const menuItems = await prisma.menuItem.findMany({
@@ -36,7 +52,17 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
     throw new Error(`${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
   }
 
-  // Pre-validate slot (read-only check before transaction)
+  // Check canteen has UPI configured
+  const canteen = await prisma.canteen.findUnique({
+    where: { id: canteenId },
+    select: { id: true, name: true, vendorUpiId: true, vendorUpiName: true },
+  });
+  if (!canteen) throw new Error('Canteen not found');
+  if (!canteen.vendorUpiId) {
+    throw new Error('This canteen has not set up UPI payments yet. Please contact the vendor.');
+  }
+
+  // Pre-validate slot
   if (slotId) {
     const slot = await prisma.pickupSlot.findUnique({
       where: { id: slotId },
@@ -47,7 +73,12 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
     if (slot.currentOrders >= preOrderCap) throw new Error('This time slot is full. Please choose another slot.');
   }
 
-  // Calculate totals from database prices
+  // Validate points redemption
+  const pointsValidation = await validatePointsRedemption(userId, pointsToRedeem);
+  if (!pointsValidation.valid) throw new Error(pointsValidation.error || 'Invalid points redemption');
+  const pointsDiscount = pointsValidation.discountAmount;
+
+  // Calculate subtotal from DB prices
   let subtotal = 0;
   const orderItems = items.map((item) => {
     const mi = menuItems.find((m) => m.id === item.menuItemId)!;
@@ -63,18 +94,20 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
     };
   });
 
-  const totalAmount = subtotal;
+  // Apply wallet credit (refund balance) automatically
+  const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
+  const walletCredit = wallet ? Number(wallet.balance) : 0;
+  const afterPointsDiscount = subtotal - pointsDiscount;
+  const walletDeduction = Math.min(walletCredit, afterPointsDiscount);
+  const upiAmount = Math.max(0, afterPointsDiscount - walletDeduction);
+  const totalAmount = upiAmount; // what actually needs to be paid via UPI (wallet already applied)
+
   const orderNumber = await generateOrderNumber(canteenId);
+  const paymentMethod = upiAmount > 0 ? 'UPI_DIRECT' : 'WALLET';
+  const paymentStatus = upiAmount > 0 ? 'AWAITING_PAYMENT' : 'PAID';
+  const orderStatus = upiAmount > 0 ? OrderStatus.PENDING : OrderStatus.CONFIRMED;
 
-  // Single atomic transaction: balance check + order creation + debit + slot reservation
   const order = await prisma.$transaction(async (tx) => {
-    // Re-check wallet inside transaction to prevent race conditions
-    const wallet = await tx.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
-    if (!wallet) throw new Error('Wallet not found. Please contact support.');
-    if (Number(wallet.balance) < totalAmount) {
-      throw new Error(`INSUFFICIENT_BALANCE:${wallet.balance}:${totalAmount}`);
-    }
-
     // Re-check slot inside transaction
     if (slotId) {
       const slot = await tx.pickupSlot.findUnique({
@@ -86,20 +119,22 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
       if (slot.currentOrders >= preOrderCap) throw new Error('This time slot is now full. Please choose another slot.');
     }
 
-    // Create the order
     const newOrder = await tx.order.create({
       data: {
         orderNumber,
         userId,
         canteenId,
         slotId,
-        status: OrderStatus.CONFIRMED,
-        paymentStatus: 'PAID',
-        paymentMethod: 'WALLET',
+        status: orderStatus,
+        paymentMethod,
+        paymentStatus,
         subtotal,
         platformFee: 0,
+        discountAmount: pointsDiscount,
         totalAmount,
+        upiOrderNote: orderNumber,
         specialInstructions,
+        pointsRedeemed: pointsToRedeem,
         items: {
           create: orderItems.map((oi) => ({
             menuItem: { connect: { id: oi.menuItemId } },
@@ -117,58 +152,68 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown) {
       },
     });
 
-    // Deduct wallet
-    const updatedWallet = await tx.wallet.update({
-      where: { userId },
-      data: { balance: { decrement: totalAmount } },
-    });
-
-    // Log wallet transaction
-    await tx.walletTransaction.create({
-      data: {
-        walletId: wallet.id,
-        orderId: newOrder.id,
-        type: 'DEBIT',
-        amount: totalAmount,
-        balanceAfter: updatedWallet.balance,
-        description: `Order #${orderNumber}`,
-      },
-    });
-
-    // Reserve slot
-    if (slotId) {
-      await tx.pickupSlot.update({
-        where: { id: slotId },
-        data: { currentOrders: { increment: 1 } },
+    // Deduct wallet credit if used
+    if (walletDeduction > 0 && wallet) {
+      const updatedWallet = await tx.wallet.update({
+        where: { userId },
+        data: { balance: { decrement: walletDeduction } },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          orderId: newOrder.id,
+          type: 'DEBIT',
+          amount: walletDeduction,
+          balanceAfter: updatedWallet.balance,
+          description: `Applied to Order #${orderNumber}`,
+        },
       });
     }
 
-    // Generate QR token and store it
+    // Deduct loyalty points if redeemed
+    if (pointsToRedeem > 0) {
+      await redeemPoints(userId, newOrder.id, pointsToRedeem, pointsDiscount);
+    }
+
+    // Reserve slot
+    if (slotId) {
+      await tx.pickupSlot.update({ where: { id: slotId }, data: { currentOrders: { increment: 1 } } });
+    }
+
+    // Generate QR token (available after vendor verifies payment)
     const qrToken = generateQRToken({ orderId: newOrder.id, userId, orderNumber, canteenId });
     await tx.order.update({ where: { id: newOrder.id }, data: { qrCode: qrToken } });
 
     return { ...newOrder, qrCode: qrToken };
   });
 
-  // Invalidate slot cache after transaction
   if (slotId) await redis.del(KEYS.slotAvailability(slotId));
 
-  // Bump totalOrders counters (non-critical, best effort)
+  // Bump totalOrders counters (non-critical)
   await prisma.$transaction(
     items.map((item) =>
-      prisma.menuItem.update({
-        where: { id: item.menuItemId },
-        data: { totalOrders: { increment: item.quantity } },
-      })
+      prisma.menuItem.update({ where: { id: item.menuItemId }, data: { totalOrders: { increment: item.quantity } } })
     )
   );
 
-  // Real-time + push notification
   const ioServer = io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
-  ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order });
-  await sendOrderNotification(userId, order.id, orderNumber, OrderStatus.CONFIRMED);
 
-  return order;
+  // If fully paid (wallet/points covered all), notify vendor immediately
+  if (upiAmount <= 0) {
+    ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order });
+    await sendOrderNotification(userId, order.id, orderNumber, OrderStatus.CONFIRMED);
+  }
+
+  const upiDeepLink = upiAmount > 0
+    ? generateUpiDeepLink({
+        vendorUpiId: canteen.vendorUpiId!,
+        vendorUpiName: canteen.vendorUpiName || canteen.name,
+        amount: upiAmount,
+        orderNumber,
+      })
+    : null;
+
+  return { order: order as unknown as Record<string, unknown>, upiDeepLink, upiAmount, pointsDiscount, walletDeduction, subtotal };
 }
 
 export async function cancelOrder(
@@ -181,13 +226,13 @@ export async function cancelOrder(
     where: { id: orderId },
     select: {
       status: true, userId: true, canteenId: true, slotId: true,
-      totalAmount: true, paymentStatus: true, orderNumber: true,
+      totalAmount: true, paymentStatus: true, orderNumber: true, paymentMethod: true,
     },
   });
 
   if (!order) throw new Error('Order not found');
 
-  const cancellableStatuses: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED];
+  const cancellableStatuses: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PENDING];
   if (cancelledBy === 'student' && !cancellableStatuses.includes(order.status)) {
     throw new Error('Cannot cancel an order that is already being prepared');
   }
@@ -195,14 +240,24 @@ export async function cancelOrder(
   await prisma.$transaction(async (tx) => {
     await tx.order.update({
       where: { id: orderId },
-      data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: reason },
+      data: {
+        status: OrderStatus.CANCELLED,
+        paymentStatus: 'EXPIRED',
+        cancelledAt: new Date(),
+        cancelReason: reason,
+      },
     });
 
-    // Refund wallet for paid wallet orders
-    if (order.paymentStatus === 'PAID') {
-      const wallet = await tx.wallet.update({
+    // Refund wallet for orders where payment was verified (UPI) or wallet-paid
+    const shouldRefund =
+      order.paymentStatus === 'VERIFIED' ||
+      order.paymentStatus === 'PAID';
+
+    if (shouldRefund) {
+      const wallet = await tx.wallet.upsert({
         where: { userId: order.userId },
-        data: { balance: { increment: Number(order.totalAmount) } },
+        update: { balance: { increment: Number(order.totalAmount) } },
+        create: { userId: order.userId, balance: Number(order.totalAmount) },
       });
       await tx.walletTransaction.create({
         data: {
@@ -211,18 +266,14 @@ export async function cancelOrder(
           type: 'REFUND',
           amount: Number(order.totalAmount),
           balanceAfter: wallet.balance,
-          description: `Refund for cancelled order #${order.orderNumber}`,
+          description: `Refund for cancelled Order #${order.orderNumber}`,
         },
       });
     }
   });
 
-  // Decrement slot and invalidate cache
   if (order.slotId) {
-    await prisma.pickupSlot.update({
-      where: { id: order.slotId },
-      data: { currentOrders: { decrement: 1 } },
-    });
+    await prisma.pickupSlot.update({ where: { id: order.slotId }, data: { currentOrders: { decrement: 1 } } });
     await redis.del(KEYS.slotAvailability(order.slotId));
   }
 

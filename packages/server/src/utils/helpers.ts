@@ -9,9 +9,21 @@ export function parsePagination(page: string = '1', limit: string = '20') {
 }
 
 export function buildDateRange(date?: string | Date) {
-  const d = date ? new Date(date) : new Date();
-  const start = new Date(d); start.setHours(0, 0, 0, 0);
-  const end = new Date(d); end.setHours(23, 59, 59, 999);
+  const IST_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
+
+  let dateStr: string;
+  if (!date) {
+    dateStr = new Date(Date.now() + IST_MS).toISOString().slice(0, 10);
+  } else if (date instanceof Date) {
+    dateStr = new Date(date.getTime() + IST_MS).toISOString().slice(0, 10);
+  } else {
+    dateStr = date;
+  }
+
+  const [year, month, day] = dateStr.split('-').map(Number);
+  // IST midnight in UTC = subtract 5h30m from 00:00 IST
+  const start = new Date(Date.UTC(year, month - 1, day, 0, 0, 0, 0) - IST_MS);
+  const end   = new Date(Date.UTC(year, month - 1, day, 23, 59, 59, 999) - IST_MS);
   return { gte: start, lte: end };
 }
 
