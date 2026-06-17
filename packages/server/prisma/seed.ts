@@ -2,6 +2,9 @@ import { PrismaClient, UserRole } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+const CHRIST_BGR_ID = 'inst_christ_bgr_01';
+const DEMO_COLLEGE_ID = 'inst_demo_college_01';
+
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
 /** Build a Classic + Cheese pair for burgers / rolls / sandwiches */
@@ -89,23 +92,50 @@ async function createSlotsForCanteen(canteenId: string, date: Date, maxOrders = 
 async function main() {
   console.log('🌱  Seeding database…');
 
-  // ── 0. Wipe old menu data (safe — preserves orders / wallets / users) ────────
- // ── 0. Wipe ALL data in correct order ────────
-await prisma.wallet.deleteMany({});
-await prisma.user.deleteMany({});
- await prisma.walletTransaction.deleteMany({});
-await prisma.notification.deleteMany({});
-await prisma.rating.deleteMany({});
-await prisma.favorite.deleteMany({});
-await prisma.orderItem.deleteMany({});
-await prisma.order.deleteMany({});
-await prisma.announcement.deleteMany({});
-await prisma.dailySettlement.deleteMany({});
-await prisma.menuItem.deleteMany({});
-await prisma.menuCategory.deleteMany({});
-await prisma.pickupSlot.deleteMany({});
-await prisma.canteen.deleteMany({});
-  console.log('Old canteen / menu data cleared.');
+  // ── 0. Wipe ALL data in dependency order ─────────────────────────────────────
+  await prisma.pointTransaction.deleteMany({});
+  await prisma.loyaltyAccount.deleteMany({});
+  await prisma.walletTransaction.deleteMany({});
+  await prisma.wallet.deleteMany({});
+  await prisma.notification.deleteMany({});
+  await prisma.rating.deleteMany({});
+  await prisma.favorite.deleteMany({});
+  await prisma.orderItem.deleteMany({});
+  await prisma.order.deleteMany({});
+  await prisma.announcement.deleteMany({});
+  await prisma.dailySettlement.deleteMany({});
+  await prisma.menuItem.deleteMany({});
+  await prisma.menuCategory.deleteMany({});
+  await prisma.pickupSlot.deleteMany({});
+  await prisma.canteen.deleteMany({});
+  await prisma.user.deleteMany({});
+  await prisma.institution.deleteMany({});
+  console.log('All data cleared.');
+
+  // ── 1a. Institutions ──────────────────────────────────────────────────────────
+  const christBgr = await prisma.institution.create({
+    data: {
+      id: CHRIST_BGR_ID,
+      name: 'Christ University — Central Campus',
+      slug: 'christ-bgr',
+      emailDomain: 'christuniversity.in',
+      city: 'Bengaluru',
+      isActive: true,
+    },
+  });
+
+  const demoCollege = await prisma.institution.create({
+    data: {
+      id: DEMO_COLLEGE_ID,
+      name: 'Demo College',
+      slug: 'demo-college',
+      emailDomain: 'democollege.edu',
+      city: 'Mumbai',
+      isActive: true,
+    },
+  });
+
+  console.log('✅  2 institutions created.');
 
   // ── 1. Canteens ───────────────────────────────────────────────────────────────
   const canteensData = [
@@ -244,7 +274,7 @@ await prisma.canteen.deleteMany({});
   ];
 
   const canteens = await Promise.all(
-    canteensData.map((c) => prisma.canteen.create({ data: c })),
+    canteensData.map((c) => prisma.canteen.create({ data: { ...c, institutionId: CHRIST_BGR_ID } })),
   );
 
   const [
@@ -252,7 +282,38 @@ await prisma.canteen.deleteMany({});
     mariyan, bhavani, hari, kiosk, birdsPark, freshetaria,
   ] = canteens;
 
-  console.log(`✅  ${canteens.length} canteens created.`);
+  // Demo canteens for the second institution
+  const [demoCafe, demoGrill] = await Promise.all([
+    prisma.canteen.create({
+      data: {
+        name: 'Campus Cafe',
+        description: 'Sandwiches, beverages and snacks.',
+        campus: 'Main Campus',
+        location: 'Ground Floor, Block A',
+        openingTime: '08:00',
+        closingTime: '20:00',
+        avgPrepTime: 8,
+        isActive: true,
+        institutionId: DEMO_COLLEGE_ID,
+      },
+    }),
+    prisma.canteen.create({
+      data: {
+        name: 'The Grill House',
+        description: 'Burgers, wraps and grilled items.',
+        campus: 'Main Campus',
+        location: 'First Floor, Food Court',
+        openingTime: '09:00',
+        closingTime: '21:00',
+        avgPrepTime: 12,
+        isActive: true,
+        institutionId: DEMO_COLLEGE_ID,
+      },
+    }),
+  ]);
+  void demoCafe; void demoGrill;
+
+  console.log(`✅  ${canteens.length + 2} canteens created (${canteens.length} Christ BGR + 2 demo).`);
 
   // ════════════════════════════════════════════════════════════════════════════
   // ① MINGOES
@@ -1034,26 +1095,28 @@ await prisma.canteen.deleteMany({});
   // UIDs match the dev-login format: `dev_${email.replace(/[^a-z0-9]/gi,'_')}`
   const student = await prisma.user.upsert({
     where: { firebaseUid: 'dev_student_christuniversity_in' },
-    update: { email: 'student@christuniversity.in', name: 'Test Student', role: UserRole.STUDENT },
+    update: { email: 'student@christuniversity.in', name: 'Test Student', role: UserRole.STUDENT, institutionId: CHRIST_BGR_ID },
     create: {
       firebaseUid: 'dev_student_christuniversity_in',
       email: 'student@christuniversity.in',
       name: 'Test Student',
       role: UserRole.STUDENT,
       campus: 'Central Campus',
+      institutionId: CHRIST_BGR_ID,
       wallet: { create: { balance: 500 } },
     },
   });
 
   await prisma.user.upsert({
     where: { firebaseUid: 'dev_admin_christuniversity_in' },
-    update: { email: 'admin@christuniversity.in', name: 'University Admin', role: UserRole.ADMIN },
+    update: { email: 'admin@christuniversity.in', name: 'University Admin', role: UserRole.ADMIN, institutionId: CHRIST_BGR_ID },
     create: {
       firebaseUid: 'dev_admin_christuniversity_in',
       email: 'admin@christuniversity.in',
       name: 'University Admin',
       role: UserRole.ADMIN,
       campus: 'Central Campus',
+      institutionId: CHRIST_BGR_ID,
     },
   });
 
@@ -1075,16 +1138,16 @@ await prisma.canteen.deleteMany({});
   for (const v of vendorMappings) {
     const vendorUser = await prisma.user.upsert({
       where: { firebaseUid: v.firebaseUid },
-      update: { email: v.email, name: v.name, role: UserRole.VENDOR },
+      update: { email: v.email, name: v.name, role: UserRole.VENDOR, institutionId: CHRIST_BGR_ID },
       create: {
         firebaseUid: v.firebaseUid,
         email: v.email,
         name: v.name,
         role: UserRole.VENDOR,
         campus: 'Central Campus',
+        institutionId: CHRIST_BGR_ID,
       },
     });
-    // Assign to canteen (canteen was just recreated so must update vendorId directly)
     await prisma.canteen.update({
       where: { id: v.canteen.id },
       data: { vendorId: vendorUser.id },
@@ -1092,7 +1155,50 @@ await prisma.canteen.deleteMany({});
   }
 
   console.log('✅  Test users created (student + admin + 11 vendor accounts).');
-  console.log(`\n🎉  Seed complete! ${canteens.length} canteens, 11 pickup slot sets, 13 users.`);
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // VENDOR UPI IDs
+  // ════════════════════════════════════════════════════════════════════════════
+  // Replace these with real UPI IDs from vendors during onboarding.
+  const vendorUpiData = [
+    { name: 'Mingoes',             vendorUpiId: 'mingoes@oksbi',            vendorUpiName: 'Mingoes Canteen' },
+    { name: 'Christ Bakery',       vendorUpiId: 'christbakery@ybl',         vendorUpiName: 'Christ Bakery' },
+    { name: 'Eleven',              vendorUpiId: 'eleven.canteen@oksbi',      vendorUpiName: 'Eleven' },
+    { name: "Michael's Corner",    vendorUpiId: 'michaels.corner@ybl',       vendorUpiName: "Michael's Corner" },
+    { name: 'Punjabi Bites',       vendorUpiId: 'darshanheble@oksbi',         vendorUpiName: 'Punjabi Bites' },
+    { name: 'Mariyan Cafe',        vendorUpiId: 'mariyan.cafe@ybl',          vendorUpiName: 'Mariyan Cafe' },
+    { name: 'Bhavani Foods',       vendorUpiId: 'bhavanifoods@oksbi',        vendorUpiName: 'Bhavani Foods' },
+    { name: 'Hari Super Sandwich', vendorUpiId: 'hari.sandwich@ybl',         vendorUpiName: 'Hari Super Sandwich' },
+    { name: 'Kiosk Canteen',       vendorUpiId: 'kiosk.canteen@oksbi',       vendorUpiName: 'Kiosk Canteen' },
+    { name: 'Birds Park',          vendorUpiId: null,                        vendorUpiName: null },
+    { name: 'Freshetaria',         vendorUpiId: null,                        vendorUpiName: null },
+  ];
+
+  for (const v of vendorUpiData) {
+    await prisma.canteen.updateMany({
+      where: { name: v.name, institutionId: CHRIST_BGR_ID },
+      data: { vendorUpiId: v.vendorUpiId, vendorUpiName: v.vendorUpiName },
+    });
+  }
+  console.log('✅  Vendor UPI IDs seeded.');
+
+  // ════════════════════════════════════════════════════════════════════════════
+  // STUDENT LOYALTY ACCOUNT (with test points)
+  // ════════════════════════════════════════════════════════════════════════════
+  await prisma.loyaltyAccount.upsert({
+    where: { userId: student.id },
+    update: {},
+    create: {
+      userId: student.id,
+      totalPoints: 150,
+      lifetimePoints: 150,
+      totalSaved: 0,
+    },
+  });
+  console.log('✅  Student loyalty account created (150 test points).');
+
+  console.log(`\n🎉  Seed complete! Institutions: ${christBgr.slug}, ${demoCollege.slug}`);
+  console.log(`   ${canteens.length + 2} canteens, 11 pickup slot sets, 13 users.`);
   console.log('   student@christuniversity.in  /  admin@christuniversity.in');
   console.log('   vendor@christuniversity.in  (Mingoes)');
   console.log('   vendor.bakery@christuniversity.in  (Christ Bakery)');

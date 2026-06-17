@@ -16,30 +16,59 @@ enum UserRole {
   FACULTY
   VENDOR
   ADMIN
+  SUPER_ADMIN
+}
+
+// ============================================================
+// INSTITUTION (multi-tenant root)
+// ============================================================
+
+model Institution {
+  id          String   @id @default(uuid())
+  name        String
+  slug        String   @unique
+  emailDomain String   @map("email_domain")
+  logoUrl     String?  @map("logo_url")
+  city        String?
+  isActive    Boolean  @default(true) @map("is_active")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  canteens      Canteen[]
+  users         User[]
+  announcements Announcement[]
+
+  @@map("institutions")
 }
 
 model User {
-  id             String    @id @default(uuid())
-  firebaseUid    String    @unique @map("firebase_uid")
-  email          String    @unique
-  name           String
-  phone          String?
-  role           UserRole  @default(STUDENT)
-  avatarUrl      String?   @map("avatar_url")
-  campus         String?   // "Bannerghatta", "Kengeri", "Central"
-  department     String?   // "MCA", "BBA", "BTECH", null for faculty/admin
-  dietPreference String?   @map("diet_preference") // "veg", "nonveg", "jain", "noegg"
-  fcmToken       String?   @map("fcm_token")
-  createdAt      DateTime  @default(now()) @map("created_at")
-  updatedAt      DateTime  @updatedAt @map("updated_at")
+  id               String    @id @default(uuid())
+  firebaseUid      String    @unique @map("firebase_uid")
+  email            String    @unique
+  name             String
+  phone            String?
+  role             UserRole  @default(STUDENT)
+  avatarUrl        String?   @map("avatar_url")
+  campus           String?   // "Bannerghatta", "Kengeri", "Central"
+  department       String?   // "MCA", "BBA", "BTECH", null for faculty/admin
+  dietPreference   String?   @map("diet_preference") // "veg", "nonveg", "jain", "noegg"
+  fcmToken         String?   @map("fcm_token")
+  institutionId    String?   @map("institution_id")
+  orderStrikes     Int       @default(0) @map("order_strikes")
+  strikeBannedUntil DateTime? @map("strike_banned_until")
+  createdAt        DateTime  @default(now()) @map("created_at")
+  updatedAt        DateTime  @updatedAt @map("updated_at")
 
-  wallet        Wallet?
-  orders        Order[]
-  ratings       Rating[]
-  favorites     Favorite[]
-  vendorCanteen Canteen?       @relation("VendorCanteen")
-  notifications Notification[]
+  institution    Institution?   @relation(fields: [institutionId], references: [id])
+  wallet         Wallet?
+  orders         Order[]
+  ratings        Rating[]
+  favorites      Favorite[]
+  vendorCanteen  Canteen?       @relation("VendorCanteen")
+  notifications  Notification[]
+  loyaltyAccount LoyaltyAccount?
 
+  @@index([institutionId])
   @@map("users")
 }
 
@@ -48,21 +77,25 @@ model User {
 // ============================================================
 
 model Canteen {
-  id           String   @id @default(uuid())
-  name         String   // "Mingoes", "Christ Bakery", "Punjabi Bites", "Michael", "Freshetaria"
-  description  String?
-  campus       String   // "Bannerghatta Road", "Kengeri", "Central City"
-  location     String?  // "Block 1, Ground Floor"
-  imageUrl     String?  @map("image_url")
-  bannerUrl    String?  @map("banner_url")
-  isActive     Boolean  @default(true) @map("is_active")
-  openingTime  String   @map("opening_time") // "07:30"
-  closingTime  String   @map("closing_time") // "20:00"
-  contactPhone String?  @map("contact_phone")
-  avgPrepTime  Int      @default(15) @map("avg_prep_time")
-  createdAt    DateTime @default(now()) @map("created_at")
-  updatedAt    DateTime @updatedAt @map("updated_at")
+  id            String   @id @default(uuid())
+  name          String   // "Mingoes", "Christ Bakery", "Punjabi Bites", "Michael", "Freshetaria"
+  description   String?
+  campus        String   // "Bannerghatta Road", "Kengeri", "Central City"
+  location      String?  // "Block 1, Ground Floor"
+  imageUrl      String?  @map("image_url")
+  bannerUrl     String?  @map("banner_url")
+  isActive      Boolean  @default(true) @map("is_active")
+  openingTime   String   @map("opening_time") // "07:30"
+  closingTime   String   @map("closing_time") // "20:00"
+  contactPhone  String?  @map("contact_phone")
+  avgPrepTime   Int      @default(15) @map("avg_prep_time")
+  vendorUpiId   String?  @map("vendor_upi_id")   // "punjabibites@oksbi"
+  vendorUpiName String?  @map("vendor_upi_name") // "Punjabi Bites"
+  institutionId String   @map("institution_id")
+  createdAt     DateTime @default(now()) @map("created_at")
+  updatedAt     DateTime @updatedAt @map("updated_at")
 
+  institution   Institution       @relation(fields: [institutionId], references: [id])
   vendor        User?             @relation("VendorCanteen", fields: [vendorId], references: [id])
   vendorId      String?           @unique @map("vendor_id")
   categories    MenuCategory[]
@@ -72,6 +105,7 @@ model Canteen {
   announcements Announcement[]
   settlements   DailySettlement[]
 
+  @@index([institutionId])
   @@map("canteens")
 }
 
@@ -169,15 +203,20 @@ enum OrderStatus {
   CANCELLED
 }
 
-enum PaymentStatus {
-  PENDING
-  PAID
-  REFUNDED
-  FAILED
+enum PaymentMethod {
+  UPI_DIRECT
+  WALLET
+  CASH
 }
 
-enum PaymentMethod {
-  WALLET
+enum PaymentStatus {
+  AWAITING_PAYMENT
+  PENDING_VERIFICATION
+  VERIFIED
+  PAID
+  REFUNDED
+  EXPIRED
+  FAILED
 }
 
 model Order {
@@ -187,11 +226,13 @@ model Order {
   canteenId           String         @map("canteen_id")
   slotId              String?        @map("slot_id")
   status              OrderStatus    @default(PENDING)
-  paymentStatus       PaymentStatus  @default(PENDING) @map("payment_status")
-  paymentMethod       PaymentMethod  @default(WALLET) @map("payment_method")
+  paymentStatus       PaymentStatus  @default(AWAITING_PAYMENT) @map("payment_status")
+  paymentMethod       PaymentMethod  @default(UPI_DIRECT) @map("payment_method")
   subtotal            Decimal        @db.Decimal(10, 2)
   platformFee         Decimal        @default(0) @db.Decimal(10, 2) @map("platform_fee")
+  discountAmount      Decimal        @default(0) @db.Decimal(10, 2) @map("discount_amount")
   totalAmount         Decimal        @db.Decimal(10, 2) @map("total_amount")
+  upiOrderNote        String?        @map("upi_order_note")
   qrCode              String?        @map("qr_code")
   qrScanned           Boolean        @default(false) @map("qr_scanned")
   specialInstructions String?        @map("special_instructions")
@@ -200,8 +241,10 @@ model Order {
   pickedUpAt          DateTime?      @map("picked_up_at")
   cancelledAt         DateTime?      @map("cancelled_at")
   cancelReason        String?        @map("cancel_reason")
-  razorpayOrderId     String?        @map("razorpay_order_id")
-  razorpayPaymentId   String?        @map("razorpay_payment_id")
+  paymentClaimedAt    DateTime?      @map("payment_claimed_at")
+  paymentVerifiedAt   DateTime?      @map("payment_verified_at")
+  pointsEarned        Int            @default(0) @map("points_earned")
+  pointsRedeemed      Int            @default(0) @map("points_redeemed")
   createdAt           DateTime       @default(now()) @map("created_at")
   updatedAt           DateTime       @updatedAt @map("updated_at")
 
@@ -211,9 +254,11 @@ model Order {
   items             OrderItem[]
   rating            Rating?
   walletTransaction WalletTransaction?
+  pointTransactions PointTransaction[]
 
   @@index([userId, createdAt])
   @@index([canteenId, status])
+  @@index([canteenId, paymentStatus])
   @@index([canteenId, slotId])
   @@index([qrCode])
   @@map("orders")
@@ -256,24 +301,68 @@ enum TransactionType {
   RECHARGE
   DEBIT
   REFUND
+  CREDIT
 }
 
 model WalletTransaction {
-  id                String          @id @default(uuid())
-  walletId          String          @map("wallet_id")
-  orderId           String?         @unique @map("order_id")
-  type              TransactionType
-  amount            Decimal         @db.Decimal(10, 2)
-  balanceAfter      Decimal         @db.Decimal(10, 2) @map("balance_after")
-  description       String?
-  razorpayPaymentId String?         @map("razorpay_payment_id")
-  createdAt         DateTime        @default(now()) @map("created_at")
+  id           String          @id @default(uuid())
+  walletId     String          @map("wallet_id")
+  orderId      String?         @unique @map("order_id")
+  type         TransactionType
+  amount       Decimal         @db.Decimal(10, 2)
+  balanceAfter Decimal         @db.Decimal(10, 2) @map("balance_after")
+  description  String?
+  createdAt    DateTime        @default(now()) @map("created_at")
 
   wallet Wallet @relation(fields: [walletId], references: [id])
   order  Order? @relation(fields: [orderId], references: [id])
 
   @@index([walletId, createdAt])
   @@map("wallet_transactions")
+}
+
+// ============================================================
+// LOYALTY / POINTS
+// ============================================================
+
+model LoyaltyAccount {
+  id             String    @id @default(uuid())
+  userId         String    @unique @map("user_id")
+  totalPoints    Int       @default(0) @map("total_points")
+  lifetimePoints Int       @default(0) @map("lifetime_points")
+  totalSaved     Decimal   @default(0) @db.Decimal(10, 2) @map("total_saved")
+  updatedAt      DateTime  @updatedAt @map("updated_at")
+  createdAt      DateTime  @default(now()) @map("created_at")
+
+  user         User               @relation(fields: [userId], references: [id])
+  transactions PointTransaction[]
+
+  @@map("loyalty_accounts")
+}
+
+enum PointTransactionType {
+  EARNED
+  REDEEMED
+  EXPIRED
+  BONUS
+}
+
+model PointTransaction {
+  id           String               @id @default(uuid())
+  loyaltyId    String               @map("loyalty_id")
+  orderId      String?              @map("order_id")
+  type         PointTransactionType
+  points       Int
+  description  String
+  balanceAfter Int                  @map("balance_after")
+  expiresAt    DateTime?            @map("expires_at")
+  createdAt    DateTime             @default(now()) @map("created_at")
+
+  loyaltyAccount LoyaltyAccount @relation(fields: [loyaltyId], references: [id])
+  order          Order?         @relation(fields: [orderId], references: [id])
+
+  @@index([loyaltyId, createdAt])
+  @@map("point_transactions")
 }
 
 // ============================================================
@@ -354,16 +443,18 @@ model Notification {
 }
 
 model Announcement {
-  id        String    @id @default(uuid())
-  canteenId String?   @map("canteen_id") // null = broadcast to all
-  title     String
-  body      String
-  isActive  Boolean   @default(true) @map("is_active")
-  startsAt  DateTime  @map("starts_at")
-  endsAt    DateTime? @map("ends_at")
-  createdAt DateTime  @default(now()) @map("created_at")
+  id            String    @id @default(uuid())
+  institutionId String?   @map("institution_id") // null = platform-wide
+  canteenId     String?   @map("canteen_id")      // null = institution-wide
+  title         String
+  body          String
+  isActive      Boolean   @default(true) @map("is_active")
+  startsAt      DateTime  @map("starts_at")
+  endsAt        DateTime? @map("ends_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
 
-  canteen Canteen? @relation(fields: [canteenId], references: [id])
+  institution Institution? @relation(fields: [institutionId], references: [id])
+  canteen     Canteen?     @relation(fields: [canteenId], references: [id])
 
   @@map("announcements")
 }
