@@ -40,7 +40,7 @@ export default function Sidebar() {
   return (
     <aside className="w-64 min-h-screen bg-[#1a1a2e] text-white flex flex-col">
       <div className="p-6 border-b border-white/10">
-        <h1 className="text-xl font-bold">Christ Canteen</h1>
+        <h1 className="text-xl font-bold">CanteenRush</h1>
         <p className="text-xs text-white/50 mt-1">{role === 'ADMIN' ? 'Admin Panel' : 'Vendor Dashboard'}</p>
       </div>
 

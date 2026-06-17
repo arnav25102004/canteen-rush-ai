@@ -3,8 +3,6 @@ export const dynamic = 'force-dynamic';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import api from '../../lib/api';
-import { auth } from '../../lib/firebase';
-import { signInWithEmailAndPassword } from 'firebase/auth';
 
 export default function LoginPage() {
   const router = useRouter();
@@ -17,36 +15,19 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true); setError('');
     try {
-      const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      const token = await userCredential.user.getIdToken();
+      const role = email.toLowerCase().includes('admin') ? 'ADMIN' : 'VENDOR';
+      const { data } = await api.post('/auth/dev-login', { email, role });
+      const { user, token } = data;
+
       localStorage.setItem('auth_token', token);
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-
-      let user;
-      try {
-        const { data } = await api.get('/auth/me');
-        user = data.user;
-      } catch (err: any) {
-        if (err.response?.status === 404 || err.response?.status === 401) {
-          const fallbackName = email.split('@')[0];
-          const role = email.toLowerCase().includes('admin') ? 'ADMIN' : 'VENDOR';
-          const { data } = await api.post('/auth/register', { firebaseToken: token, name: fallbackName, email, role });
-          user = data.user;
-        } else {
-          throw err;
-        }
-      }
-
       localStorage.setItem('user_role', user.role);
       localStorage.setItem('user_id', user.id);
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
       if (user.role === 'ADMIN') router.push('/admin/dashboard');
       else router.push('/vendor/dashboard');
     } catch (e: any) {
-      if (e.code === 'auth/user-not-found' || e.code === 'auth/wrong-password' || e.code === 'auth/invalid-credential') {
-        setError('Invalid email or password.');
-      } else {
-        setError(e?.response?.data?.error || e.message || 'Login failed.');
-      }
+      setError(e?.response?.data?.error || e.message || 'Login failed.');
     } finally {
       setLoading(false);
     }
@@ -56,9 +37,9 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-[#1a1a2e]">Christ Canteen</h1>
+          <h1 className="text-3xl font-bold text-[#1a1a2e]">CanteenRush</h1>
           <p className="text-gray-500 mt-1">Vendor & Admin Portal</p>
-          <p className="text-xs text-amber-500 mt-2">Use your @christuniversity.in email</p>
+          <p className="text-xs text-amber-500 mt-2">Use your institution email</p>
         </div>
 
         <form onSubmit={handleLogin} className="space-y-4">
@@ -67,7 +48,7 @@ export default function LoginPage() {
             <input
               type="email" value={email} onChange={(e) => setEmail(e.target.value)}
               className="w-full border border-gray-300 rounded-lg px-4 py-2 focus:outline-none focus:ring-2 focus:ring-[#e94560]"
-              placeholder="vendor@christuniversity.in" required
+              placeholder="vendor@university.in" required
             />
           </div>
           <div>

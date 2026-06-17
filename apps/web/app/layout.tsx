@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Christ Canteen — Vendor Dashboard',
-  description: 'Vendor & Admin dashboard for Christ University Virtual Canteen System',
+  title: 'CanteenRush — Vendor Dashboard',
+  description: 'Vendor & Admin dashboard for CanteenRush Smart Campus Canteen Platform',
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
