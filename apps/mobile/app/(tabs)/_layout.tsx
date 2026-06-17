@@ -13,6 +13,7 @@ export default function TabsLayout() {
       <Tabs.Screen name="home" options={{ title: 'Canteens', tabBarIcon: ({ color }) => <TabIcon emoji="🏪" color={color} /> }} />
       <Tabs.Screen name="orders" options={{ title: 'Orders', tabBarIcon: ({ color }) => <TabIcon emoji="📋" color={color} /> }} />
       <Tabs.Screen name="wallet" options={{ title: 'Wallet', tabBarIcon: ({ color }) => <TabIcon emoji="💳" color={color} /> }} />
+      <Tabs.Screen name="rewards" options={{ title: 'Rewards', tabBarIcon: ({ color }) => <TabIcon emoji="⭐" color={color} /> }} />
       <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: ({ color }) => <TabIcon emoji="👤" color={color} /> }} />
     </Tabs>
   );
