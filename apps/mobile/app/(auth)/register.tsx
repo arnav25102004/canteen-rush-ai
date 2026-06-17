@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 
 export default function RegisterScreen() {
-  const { register } = useAuthStore();
+  const { register, institution } = useAuthStore();
   const router = useRouter();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
@@ -34,9 +34,11 @@ export default function RegisterScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.logo}>ChristEats</Text>
+      <Text style={styles.logo}>CanteenRush</Text>
       <Text style={styles.subtitle}>Create your account</Text>
-      <Text style={styles.hint}>Use your @christuniversity.in email</Text>
+      <Text style={styles.hint}>
+        {institution ? `Use your @${institution.emailDomain} email` : 'Use your university email'}
+      </Text>
 
       <View style={styles.form}>
         <TextInput

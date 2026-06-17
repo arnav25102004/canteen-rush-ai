@@ -7,7 +7,7 @@ import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 
 export default function LoginScreen() {
-  const { login } = useAuthStore();
+  const { login, institution, switchInstitution } = useAuthStore();
   const router = useRouter();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -32,9 +32,18 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.logo}>ChristEats</Text>
-      <Text style={styles.subtitle}>Christ University Virtual Canteen</Text>
-      <Text style={styles.hint}>Use your @christuniversity.in email</Text>
+      <Text style={styles.logo}>CanteenRush</Text>
+      {institution ? (
+        <>
+          <Text style={styles.subtitle}>{institution.name}</Text>
+          <Text style={styles.hint}>Use your @{institution.emailDomain} email</Text>
+          <TouchableOpacity onPress={switchInstitution} style={styles.switchLink}>
+            <Text style={styles.switchText}>Not your institution? Switch →</Text>
+          </TouchableOpacity>
+        </>
+      ) : (
+        <Text style={styles.hint}>Use your university email</Text>
+      )}
 
       <View style={styles.form}>
         <TextInput
@@ -71,4 +80,6 @@ const styles = StyleSheet.create({
   registerLink: { marginTop: 24, alignItems: 'center' },
   registerText: { color: '#ffffff60', fontSize: 14 },
   registerBold: { color: '#e94560', fontWeight: '600' },
+  switchLink: { marginTop: 6, alignItems: 'center' },
+  switchText: { color: '#ffffff40', fontSize: 11 },
 });
