@@ -5,6 +5,31 @@ import { auth } from '../firebaseConfig';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
 import { CONFIG } from '../config';
 
+// Auto-refresh Firebase token on every request
+axios.interceptors.request.use(async (config) => {
+  const firebaseUser = auth.currentUser;
+  if (firebaseUser) {
+    // getIdToken(false) returns cached token if still valid, refreshes if about to expire
+    const freshToken = await firebaseUser.getIdToken(false);
+    config.headers['Authorization'] = `Bearer ${freshToken}`;
+    await AsyncStorage.setItem('auth_token', freshToken);
+  }
+  return config;
+});
+
+// On 401, clear session so user is sent back to login
+axios.interceptors.response.use(
+  (r) => r,
+  async (error) => {
+    if (error.response?.status === 401) {
+      await AsyncStorage.multiRemove(['user', 'auth_token']);
+      delete axios.defaults.headers.common['Authorization'];
+      useAuthStore.setState({ user: null, token: null });
+    }
+    return Promise.reject(error);
+  },
+);
+
 export interface AppUser {
   id: string;
   name: string;
@@ -13,13 +38,26 @@ export interface AppUser {
   canteenId?: string;
   campus?: string;
   dietPreference?: string;
+  institutionId?: string;
+}
+
+export interface Institution {
+  id: string;
+  name: string;
+  slug: string;
+  emailDomain: string;
+  logoUrl?: string;
+  city?: string;
 }
 
 interface AuthStore {
   user: AppUser | null;
   token: string | null;
+  institution: Institution | null;
   isLoaded: boolean;
   loadFromStorage: () => Promise<void>;
+  setInstitution: (inst: Institution) => Promise<void>;
+  switchInstitution: () => Promise<void>;
   login: (email: string, password: string) => Promise<void>;
   register: (name: string, email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -42,24 +80,37 @@ function mapUser(dataUser: any): AppUser {
     canteenId: dataUser.vendorCanteen?.id,
     campus: dataUser.campus,
     dietPreference: dataUser.dietPreference,
+    institutionId: dataUser.institutionId,
   };
 }
 
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
   token: null,
+  institution: null,
   isLoaded: false,
 
   loadFromStorage: async () => {
     try {
-      const [rawUser, rawToken] = await AsyncStorage.multiGet(['user', 'auth_token']);
+      const [rawUser, rawToken, rawInst] = await AsyncStorage.multiGet(['user', 'auth_token', 'institution']);
       const user = rawUser[1] ? (JSON.parse(rawUser[1]) as AppUser) : null;
       const token = rawToken[1] ?? null;
+      const institution = rawInst[1] ? (JSON.parse(rawInst[1]) as Institution) : null;
       applyToken(token);
-      set({ user, token, isLoaded: true });
+      set({ user, token, institution, isLoaded: true });
     } catch {
-      set({ user: null, token: null, isLoaded: true });
+      set({ user: null, token: null, institution: null, isLoaded: true });
     }
+  },
+
+  setInstitution: async (inst) => {
+    await AsyncStorage.setItem('institution', JSON.stringify(inst));
+    set({ institution: inst });
+  },
+
+  switchInstitution: async () => {
+    await AsyncStorage.removeItem('institution');
+    set({ institution: null });
   },
 
   login: async (email, password) => {
@@ -107,7 +158,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
 
   logout: async () => {
     applyToken(null);
-    await AsyncStorage.multiRemove(['user', 'auth_token']);
-    set({ user: null, token: null });
+    await AsyncStorage.multiRemove(['user', 'auth_token', 'institution']);
+    set({ user: null, token: null, institution: null });
   },
 }));

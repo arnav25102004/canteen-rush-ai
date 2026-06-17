@@ -1,4 +1,4 @@
-const DEV_API_URL = 'http://192.168.1.100:3001/api'; // replace with your local IP when testing locally
+const DEV_API_URL = 'https://canteen-rush-ai.onrender.com/api';
 const PROD_API_URL = 'https://canteen-rush-ai.onrender.com/api';
 
 export const CONFIG = {
