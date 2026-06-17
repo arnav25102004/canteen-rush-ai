@@ -25,6 +25,8 @@ import paymentRoutes from './routes/payment.routes';
 import notificationRoutes from './routes/notification.routes';
 import adminRoutes from './routes/admin.routes';
 import analyticsRoutes from './routes/analytics.routes';
+import institutionRoutes from './routes/institution.routes';
+import loyaltyRoutes from './routes/loyalty.routes';
 import { globalErrorHandler } from './middleware/errorHandler';
 
 // Jobs
@@ -86,6 +88,8 @@ app.use('/api/notifications', notificationRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/vendor/analytics', analyticsRoutes);
+app.use('/api/institutions', institutionRoutes);
+app.use('/api/loyalty', loyaltyRoutes);
 
 // Setup Socket.IO
 setupSocketIO(io);
@@ -99,22 +103,26 @@ async function bootstrap() {
   try {
     await prisma.$connect();
     console.log('PostgreSQL connected');
-
-    await redis.ping();
-    console.log('Redis connected');
-
-    // Start background jobs
-    startSlotGenerationJob();
-    startAutoCancelJob();
-
-    server.listen(PORT, () => {
-      console.log(`Server running on http://localhost:${PORT}`);
-      console.log(`Socket.IO ready`);
-    });
   } catch (err) {
-    console.error('Failed to start server:', err);
+    console.error('Failed to connect to PostgreSQL:', err);
     process.exit(1);
   }
+
+  try {
+    await redis.ping();
+    console.log('Redis connected');
+  } catch (err) {
+    console.warn('Redis unavailable — payment status polling disabled, continuing without it');
+  }
+
+  // Start background jobs
+  startSlotGenerationJob();
+  startAutoCancelJob();
+
+  server.listen(PORT, () => {
+    console.log(`Server running on http://localhost:${PORT}`);
+    console.log(`Socket.IO ready`);
+  });
 }
 
 bootstrap();

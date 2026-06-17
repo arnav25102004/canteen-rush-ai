@@ -25,4 +25,4 @@ export const PAGINATION = {
   MAX_LIMIT: 100,
 } as const;
 
-export const CHRIST_EMAIL_DOMAIN = 'christuniversity.in';
+export const DEFAULT_INSTITUTION_SLUG = 'christ-bgr';
