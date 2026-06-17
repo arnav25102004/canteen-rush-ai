@@ -2,6 +2,7 @@ import { Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { placeOrder, cancelOrder } from '../services/order.service';
+import { awardPointsForOrder } from '../services/loyalty.service';
 import { verifyQRToken, generateQRCodeDataURL } from '../services/qr.service';
 import { sendOrderNotification } from '../services/notification.service';
 import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '../utils/helpers';
@@ -20,6 +21,7 @@ const placeOrderSchema = z.object({
     notes: z.string().optional(),
   })).min(1),
   specialInstructions: z.string().optional(),
+  pointsToRedeem: z.number().int().min(0).optional().default(0),
 });
 
 const VALID_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
@@ -33,21 +35,114 @@ export async function createOrder(req: AuthRequest, res: Response) {
   const v = validateBody(placeOrderSchema, req.body, res);
   if (!v.success) return;
 
+  // Check if student is strike-banned
+  const user = await prisma.user.findUnique({
+    where: { id: req.user!.id },
+    select: { orderStrikes: true, strikeBannedUntil: true },
+  });
+  if (user?.strikeBannedUntil && user.strikeBannedUntil > new Date()) {
+    const until = user.strikeBannedUntil.toLocaleDateString('en-IN');
+    return res.status(403).json({ error: `Your account is temporarily banned until ${until} due to repeated unverified payment claims.` });
+  }
+
   try {
-    const order = await placeOrder({ userId: req.user!.id, ...v.data }, req.io);
-    return res.status(201).json({ order });
+    const result = await placeOrder({ userId: req.user!.id, ...v.data }, req.io);
+    return res.status(201).json({
+      order: result.order,
+      upiDeepLink: result.upiDeepLink,
+      upiAmount: result.upiAmount,
+      pointsDiscount: result.pointsDiscount,
+      walletDeduction: result.walletDeduction,
+      subtotal: result.subtotal,
+    });
   } catch (err: unknown) {
-    const msg = (err as Error).message;
-    if (msg.startsWith('INSUFFICIENT_BALANCE:')) {
-      const [, balance, required] = msg.split(':');
-      return res.status(400).json({
-        error: 'Insufficient wallet balance. Please recharge.',
-        currentBalance: Number(balance),
-        required: Number(required),
+    return res.status(400).json({ error: (err as Error).message });
+  }
+}
+
+export async function claimPayment(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+
+  const order = await prisma.order.findUnique({
+    where: { id },
+    select: { userId: true, paymentStatus: true, orderNumber: true, canteenId: true, totalAmount: true },
+  });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.userId !== req.user!.id) return res.status(403).json({ error: 'Not your order' });
+  if (order.paymentStatus !== 'AWAITING_PAYMENT') {
+    return res.status(400).json({ error: 'Order is not awaiting payment' });
+  }
+
+  await prisma.order.update({
+    where: { id },
+    data: { paymentStatus: 'PENDING_VERIFICATION', paymentClaimedAt: new Date() },
+  });
+
+  // Notify vendor to check GPay
+  const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
+  ioServer?.to(`canteen:${order.canteenId}`).emit('payment:claimed', {
+    orderId: id,
+    orderNumber: order.orderNumber,
+    amount: Number(order.totalAmount),
+    message: `Student claims payment for Order #${order.orderNumber} — check GPay for ₹${Number(order.totalAmount).toFixed(0)}`,
+  });
+
+  return res.json({ success: true, message: 'Payment claim submitted. Vendor is verifying.' });
+}
+
+export async function verifyPayment(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+  const { confirmed } = req.body as { confirmed: boolean };
+
+  const canteenId = req.user!.canteenId;
+  if (!canteenId) return res.status(403).json({ error: 'No canteen assigned' });
+
+  const order = await prisma.order.findUnique({
+    where: { id },
+    include: { items: true },
+  });
+
+  if (!order || order.canteenId !== canteenId) return res.status(404).json({ error: 'Order not found' });
+  if (order.paymentStatus !== 'PENDING_VERIFICATION') {
+    return res.status(400).json({ error: 'Order payment is not pending verification' });
+  }
+
+  if (!confirmed) {
+    // Vendor says payment was NOT received — cancel and add strike
+    await prisma.$transaction(async (tx) => {
+      await tx.order.update({
+        where: { id },
+        data: { paymentStatus: 'EXPIRED', status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: 'Payment not received — vendor rejected' },
+      });
+      await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
+    });
+
+    const updatedUser = await prisma.user.findUnique({ where: { id: order.userId }, select: { orderStrikes: true } });
+    if (updatedUser && updatedUser.orderStrikes >= 3) {
+      await prisma.user.update({
+        where: { id: order.userId },
+        data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
       });
     }
-    return res.status(400).json({ error: msg });
+
+    const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
+    ioServer?.to(`order:${id}`).emit('order:status_update', { orderId: id, status: OrderStatus.CANCELLED, reason: 'Payment not received' });
+    await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CANCELLED);
+    return res.json({ success: true, confirmed: false });
   }
+
+  // Vendor confirmed payment received
+  const updatedOrder = await prisma.order.update({
+    where: { id },
+    data: { paymentStatus: 'VERIFIED', status: OrderStatus.CONFIRMED, paymentVerifiedAt: new Date() },
+  });
+
+  const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
+  ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order: updatedOrder });
+  ioServer?.to(`order:${id}`).emit('order:status_update', { orderId: id, status: OrderStatus.CONFIRMED, paymentStatus: 'VERIFIED' });
+  await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CONFIRMED);
+
+  return res.json({ success: true, confirmed: true, order: updatedOrder });
 }
 
 export async function getLastOrder(req: AuthRequest, res: Response) {
@@ -92,7 +187,7 @@ export async function getOrder(req: AuthRequest, res: Response) {
   const order = await prisma.order.findUnique({
     where: { id },
     include: {
-      canteen: { select: { id: true, name: true, imageUrl: true, location: true } },
+      canteen: { select: { id: true, name: true, imageUrl: true, location: true, vendorUpiId: true, vendorUpiName: true } },
       slot: true,
       items: { include: { menuItem: { select: { name: true, imageUrl: true, price: true } } } },
       rating: true,
@@ -126,10 +221,7 @@ export async function studentCancelOrder(req: AuthRequest, res: Response) {
   const { id } = req.params;
   const { reason } = req.body;
 
-  const order = await prisma.order.findUnique({
-    where: { id },
-    select: { userId: true },
-  });
+  const order = await prisma.order.findUnique({ where: { id }, select: { userId: true } });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.userId !== req.user!.id) return res.status(403).json({ error: 'Forbidden' });
 
@@ -186,10 +278,7 @@ export async function updateOrderStatus(req: AuthRequest, res: Response) {
 
   const updated = await prisma.order.update({
     where: { id },
-    data: {
-      status,
-      ...(status === OrderStatus.READY ? { actualReadyAt: new Date() } : {}),
-    },
+    data: { status, ...(status === OrderStatus.READY ? { actualReadyAt: new Date() } : {}) },
   });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status, estimatedReadyAt: updated.estimatedReadyAt });
@@ -224,6 +313,9 @@ export async function scanQR(req: AuthRequest, res: Response) {
 
   emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.PICKED_UP });
 
+  // Award loyalty points now that order is PICKED_UP
+  awardPointsForOrder(id).catch((err) => console.error('[Loyalty] Failed to award points:', err));
+
   return res.json({ success: true, order: updated });
 }
 
@@ -246,16 +338,12 @@ export async function respondToOrder(req: AuthRequest, res: Response) {
   }
 
   if (action === 'ACCEPT') {
-    const updated = await prisma.order.update({
-      where: { id },
-      data: { status: OrderStatus.ACCEPTED },
-    });
+    const updated = await prisma.order.update({ where: { id }, data: { status: OrderStatus.ACCEPTED } });
     emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.ACCEPTED });
     await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.ACCEPTED);
     return res.json({ order: updated });
   }
 
-  // REJECT — cancel and refund wallet
   try {
     await cancelOrder(id, 'vendor', rejectReason || 'Rejected by vendor', req.io);
     return res.json({ success: true });
@@ -288,9 +376,7 @@ export async function getPrepSheet(req: AuthRequest, res: Response) {
   const aggregated: Record<string, { name: string; quantity: number; slots: Record<string, number> }> = {};
   for (const oi of orderItems) {
     const key = oi.menuItemId;
-    const slotLabel = oi.order.slot
-      ? `${oi.order.slot.startTime}-${oi.order.slot.endTime}`
-      : 'Walk-in';
+    const slotLabel = oi.order.slot ? `${oi.order.slot.startTime}-${oi.order.slot.endTime}` : 'Walk-in';
     if (!aggregated[key]) aggregated[key] = { name: oi.menuItem.name, quantity: 0, slots: {} };
     aggregated[key].quantity += oi.quantity;
     aggregated[key].slots[slotLabel] = (aggregated[key].slots[slotLabel] || 0) + oi.quantity;

@@ -7,19 +7,28 @@ import { z } from 'zod';
 
 // ─── Email helpers ─────────────────────────────────────────────────────────────
 
-function isChristEmail(email: string): boolean {
-  // Accepts: arnav@mca.christuniversity.in, prof@christuniversity.in
-  return /@([\w.-]+\.)?christuniversity\.in$/i.test(email);
+function extractEmailDomain(email: string): string {
+  return email.split('@')[1]?.toLowerCase() || '';
 }
 
 function extractDepartment(email: string): string | null {
   // arnav@mca.christuniversity.in → "MCA"
-  // prof@christuniversity.in → null
-  const match = email.match(/@(\w+)\.christuniversity\.in$/i);
-  if (match && match[1].toLowerCase() !== 'christuniversity') {
-    return match[1].toUpperCase();
-  }
+  const match = email.match(/@(\w+)\.[\w.]+$/i);
+  if (match && match[1].length <= 10) return match[1].toUpperCase();
   return null;
+}
+
+async function findInstitutionByEmail(email: string) {
+  const emailDomain = extractEmailDomain(email);
+  if (!emailDomain) return null;
+  // Match exact domain or parent domain (e.g. mca.christuniversity.in → christuniversity.in)
+  const parts = emailDomain.split('.');
+  const domainsToTry: string[] = [emailDomain];
+  if (parts.length > 2) domainsToTry.push(parts.slice(-2).join('.'));
+
+  return prisma.institution.findFirst({
+    where: { emailDomain: { in: domainsToTry }, isActive: true },
+  });
 }
 
 // ─── Dev-mode login (only when Firebase is not configured) ────────────────────
@@ -36,9 +45,10 @@ export async function devLogin(req: Request, res: Response) {
   const { email, name, role } = req.body as { email: string; name?: string; role?: string };
   if (!email) return res.status(400).json({ error: 'email required' });
 
-  if (!isChristEmail(email)) {
+  const institution = await findInstitutionByEmail(email);
+  if (!institution) {
     return res.status(400).json({
-      error: 'Please use your Christ University email address to register.',
+      error: 'Please use your institution email address to register.',
     });
   }
 
@@ -46,20 +56,17 @@ export async function devLogin(req: Request, res: Response) {
   const userRole = (role as UserRole) || UserRole.STUDENT;
   const department = extractDepartment(email);
 
-  // Find by firebaseUid first, then fall back to email (handles re-registration)
   let user = await prisma.user.findUnique({
     where: { firebaseUid },
     include: { wallet: true, vendorCanteen: { select: { id: true, name: true } } },
   });
 
   if (!user) {
-    // Check if email already exists with a different uid (e.g. from old seed/register)
     const byEmail = await prisma.user.findUnique({ where: { email } });
     if (byEmail) {
-      // Adopt existing account — just update the firebaseUid to the dev format
       user = await prisma.user.update({
         where: { email },
-        data: { firebaseUid },
+        data: { firebaseUid, institutionId: institution.id },
         include: { wallet: true, vendorCanteen: { select: { id: true, name: true } } },
       });
     } else {
@@ -71,6 +78,7 @@ export async function devLogin(req: Request, res: Response) {
           role: userRole,
           campus: 'Central Campus',
           department,
+          institutionId: institution.id,
           wallet: userRole === UserRole.STUDENT || userRole === UserRole.FACULTY
             ? { create: { balance: 0 } }
             : undefined,
@@ -81,7 +89,7 @@ export async function devLogin(req: Request, res: Response) {
   }
 
   const token = makeMockToken(firebaseUid, email);
-  return res.json({ user, token });
+  return res.json({ user, token, institution });
 }
 
 const registerSchema = z.object({
@@ -114,9 +122,10 @@ export async function register(req: Request, res: Response) {
   const email: string = parse.data.email || decoded.email || '';
   const name: string = parse.data.name || (decoded as any).name || email.split('@')[0];
 
-  if (!isChristEmail(email)) {
+  const institution = await findInstitutionByEmail(email);
+  if (!institution) {
     return res.status(400).json({
-      error: 'Please use your Christ University email address to register.',
+      error: 'Please use your institution email address to register.',
     });
   }
 
@@ -134,6 +143,7 @@ export async function register(req: Request, res: Response) {
       campus,
       phone,
       department,
+      institutionId: institution.id,
       wallet: role === UserRole.STUDENT || role === UserRole.FACULTY
         ? { create: { balance: 0 } }
         : undefined,
@@ -141,7 +151,7 @@ export async function register(req: Request, res: Response) {
     include: { wallet: true },
   });
 
-  return res.status(201).json({ user });
+  return res.status(201).json({ user, institution });
 }
 
 export async function getMe(req: AuthRequest, res: Response) {

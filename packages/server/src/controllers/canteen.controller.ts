@@ -18,14 +18,15 @@ const canteenSchema = z.object({
   closingTime: z.string().regex(/^\d{2}:\d{2}$/),
   contactPhone: z.string().optional(),
   avgPrepTime: z.number().int().positive().optional(),
-  vendorId: z.string().uuid().optional(),
+  institutionId: z.string(),
+  isActive: z.boolean().optional(),
 });
 
 export async function listCanteens(req: Request, res: Response) {
-  const { campus } = req.query;
+  const { campus, includeInactive } = req.query;
   const canteens = await prisma.canteen.findMany({
     where: {
-      isActive: true,
+      ...(includeInactive !== 'true' ? { isActive: true } : {}),
       ...(campus ? { campus: { contains: campus as string, mode: 'insensitive' } } : {}),
     },
     include: {
