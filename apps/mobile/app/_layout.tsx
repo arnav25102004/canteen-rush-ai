@@ -1,14 +1,26 @@
-import { useEffect } from 'react';
-import { View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { View, ActivityIndicator, Text } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import axios from 'axios';
 import { useAuthStore } from '../store/authStore';
 
 export default function RootLayout() {
   const { user, institution, isLoaded, loadFromStorage } = useAuthStore();
   const router = useRouter();
   const segments = useSegments();
+  const [serverReady, setServerReady] = useState(false);
+  const [serverError, setServerError] = useState(false);
 
   useEffect(() => {
+    const checkServer = async () => {
+      try {
+        await axios.get('https://canteen-rush-ai.onrender.com/api/health', { timeout: 60000 });
+        setServerReady(true);
+      } catch {
+        setServerError(true);
+      }
+    };
+    checkServer();
     loadFromStorage();
   }, []);
 
@@ -25,6 +37,25 @@ export default function RootLayout() {
       router.replace('/(tabs)/home');
     }
   }, [user, institution, isLoaded, segments]);
+
+  if (serverError) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0B1120' }}>
+        <Text style={{ color: '#EF4444', fontSize: 16 }}>Unable to connect to server</Text>
+        <Text style={{ color: '#94A3B8', fontSize: 12, marginTop: 8 }}>Check your internet connection</Text>
+      </View>
+    );
+  }
+
+  if (!serverReady) {
+    return (
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0B1120' }}>
+        <ActivityIndicator size="large" color="#F97316" />
+        <Text style={{ color: '#94A3B8', marginTop: 16, fontSize: 14 }}>Starting CanteenRush...</Text>
+        <Text style={{ color: '#475569', marginTop: 8, fontSize: 12 }}>First load may take up to 60 seconds</Text>
+      </View>
+    );
+  }
 
   return (
     <View style={{ flex: 1 }}>

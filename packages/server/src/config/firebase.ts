@@ -48,6 +48,7 @@ export async function verifyFirebaseToken(token: string): Promise<admin.auth.Dec
     }
     if (!admin.apps.length) {
       const payload = JSON.parse(Buffer.from(token.split('.')[1] || 'e30=', 'base64').toString());
+      payload.uid = payload.uid || payload.user_id || payload.sub;
       return payload as admin.auth.DecodedIdToken;
     }
     try {

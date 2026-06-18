@@ -34,7 +34,12 @@ export default function VendorDashboard() {
 
     const canteenId = localStorage.getItem('canteen_id');
     if (canteenId) {
-      const s = io(process.env.NEXT_PUBLIC_WS_URL || 'http://localhost:3001');
+      const s = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'https://canteen-rush-ai.onrender.com', {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 5,
+      });
       s.emit('join:canteen', { canteenId });
       s.on('order:new', ({ order }: { order: Order }) => {
         setLiveOrders((prev) => [order, ...prev].slice(0, 10));
