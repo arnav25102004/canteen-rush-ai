@@ -13,7 +13,6 @@ export function generateUpiDeepLink(params: UpiLinkParams): string {
   return (
     `upi://pay?pa=${vendorUpiId}` +
     `&pn=${encodeURIComponent(vendorUpiName)}` +
-    `&mc=0000` +
     `&tr=${encodeURIComponent(orderNumber)}` +
     `&tn=${encodeURIComponent(orderNumber)}` +
     `&am=${amount.toFixed(2)}` +
