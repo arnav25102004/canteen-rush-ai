@@ -9,7 +9,6 @@
     "lint": "next lint"
   },
   "dependencies": {
-    "@next/swc-win32-x64-msvc": "^16.2.6",
     "axios": "^1.6.8",
     "clsx": "^2.1.0",
     "date-fns": "^3.6.0",
