@@ -129,10 +129,21 @@ export async function register(req: Request, res: Response) {
     });
   }
 
-  const existing = await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } });
-  if (existing) return res.status(409).json({ error: 'User already registered' });
+  const existingByUid = await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } });
+  if (existingByUid) return res.status(409).json({ error: 'User already registered' });
 
   const department = extractDepartment(email);
+
+  // If user exists by email (e.g. seeded via devLogin), link the real Firebase UID
+  const existingByEmail = await prisma.user.findUnique({ where: { email } });
+  if (existingByEmail) {
+    const user = await prisma.user.update({
+      where: { email },
+      data: { firebaseUid: decoded.uid, institutionId: institution.id },
+      include: { wallet: true },
+    });
+    return res.status(200).json({ user, institution });
+  }
 
   const user = await prisma.user.create({
     data: {
