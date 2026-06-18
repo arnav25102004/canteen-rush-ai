@@ -1,11 +1,11 @@
 import { Router } from 'express';
 import {
   listCanteens, getCanteen, getCanteenLiveStats,
-  createCanteen, updateCanteen, deactivateCanteen,
+  createCanteen, updateCanteen, deactivateCanteen, updateMyCanteenUpi,
 } from '../controllers/canteen.controller';
 import { getCanteenMenu, searchMenuInCanteen, searchMenuGlobal } from '../controllers/menu.controller';
 import { listSlotsForCanteen } from '../controllers/slot.controller';
-import { authenticate, requireAdmin, optionalAuthenticate } from '../middleware/auth';
+import { authenticate, requireAdmin, requireVendor, optionalAuthenticate } from '../middleware/auth';
 
 const router = Router();
 
@@ -16,6 +16,9 @@ router.get('/:id/live-stats', getCanteenLiveStats);
 router.get('/:id/menu', getCanteenMenu);
 router.get('/:id/menu/search', searchMenuInCanteen);
 router.get('/:id/slots', optionalAuthenticate, listSlotsForCanteen);
+
+// Vendor — update own canteen UPI details
+router.patch('/my/upi', authenticate, requireVendor, updateMyCanteenUpi);
 
 // Admin only
 router.post('/', authenticate, requireAdmin, createCanteen);

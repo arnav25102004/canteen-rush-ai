@@ -86,6 +86,18 @@ export async function updateCanteen(req: AuthRequest, res: Response) {
   return res.json({ canteen });
 }
 
+export async function updateMyCanteenUpi(req: AuthRequest, res: Response) {
+  const canteen = await prisma.canteen.findFirst({ where: { vendorId: req.user!.id } });
+  if (!canteen) return res.status(404).json({ error: 'No canteen assigned to this vendor' });
+
+  const { vendorUpiId, vendorUpiName } = req.body;
+  const updated = await prisma.canteen.update({
+    where: { id: canteen.id },
+    data: { vendorUpiId, vendorUpiName },
+  });
+  return res.json({ canteen: updated });
+}
+
 export async function deactivateCanteen(req: AuthRequest, res: Response) {
   const { id } = req.params;
   await prisma.canteen.update({ where: { id }, data: { isActive: false } });
