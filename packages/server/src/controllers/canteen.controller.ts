@@ -20,6 +20,8 @@ const canteenSchema = z.object({
   avgPrepTime: z.number().int().positive().optional(),
   institutionId: z.string(),
   isActive: z.boolean().optional(),
+  vendorUpiId: z.string().optional(),
+  vendorUpiName: z.string().optional(),
 });
 
 export async function listCanteens(req: Request, res: Response) {
