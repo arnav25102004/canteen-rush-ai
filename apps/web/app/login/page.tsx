@@ -2,6 +2,8 @@
 export const dynamic = 'force-dynamic';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
+import { signInWithEmailAndPassword } from 'firebase/auth';
+import { auth } from '../../lib/firebase';
 import api from '../../lib/api';
 
 export default function LoginPage() {
@@ -15,19 +17,43 @@ export default function LoginPage() {
     e.preventDefault();
     setLoading(true); setError('');
     try {
-      const role = email.toLowerCase().includes('admin') ? 'ADMIN' : 'VENDOR';
-      const { data } = await api.post('/auth/dev-login', { email, role });
-      const { user, token } = data;
+      const credential = await signInWithEmailAndPassword(auth, email, password);
+      const token = await credential.user.getIdToken();
 
       localStorage.setItem('auth_token', token);
+      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+
+      let userData;
+      try {
+        const { data } = await api.get('/auth/me');
+        userData = data.user;
+      } catch (meErr: any) {
+        if (meErr?.response?.status === 401) {
+          // First login — register in DB
+          const role = email.toLowerCase().includes('admin') ? 'ADMIN' : 'VENDOR';
+          const { data } = await api.post('/auth/register', { firebaseToken: token, email, role });
+          userData = data.user;
+        } else {
+          throw meErr;
+        }
+      }
+
+      const user = userData;
+
       localStorage.setItem('user_role', user.role);
       localStorage.setItem('user_id', user.id);
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
       if (user.role === 'ADMIN') router.push('/admin/dashboard');
       else router.push('/vendor/dashboard');
     } catch (e: any) {
-      setError(e?.response?.data?.error || e.message || 'Login failed.');
+      const code = e?.code;
+      if (code === 'auth/user-not-found' || code === 'auth/wrong-password' || code === 'auth/invalid-credential') {
+        setError('Invalid email or password.');
+      } else if (code === 'auth/too-many-requests') {
+        setError('Too many attempts. Please try again later.');
+      } else {
+        setError(e?.response?.data?.error || e.message || 'Login failed.');
+      }
     } finally {
       setLoading(false);
     }
