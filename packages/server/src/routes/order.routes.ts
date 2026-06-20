@@ -2,7 +2,7 @@ import { Router } from 'express';
 import {
   createOrder, getMyOrders, getOrder, getOrderQR,
   studentCancelOrder, getVendorOrders, updateOrderStatus, scanQR, getPrepSheet,
-  getLastOrder, respondToOrder, claimPayment, verifyPayment,
+  getLastOrder, respondToOrder, claimPayment, verifyPayment, getPaymentInfo,
 } from '../controllers/order.controller';
 import { authenticate, requireVendor } from '../middleware/auth';
 
@@ -24,5 +24,6 @@ router.get('/:id', authenticate, getOrder);
 router.get('/:id/qr', authenticate, getOrderQR);
 router.post('/:id/cancel', authenticate, studentCancelOrder);
 router.post('/:id/claim-payment', authenticate, claimPayment);
+router.get('/:id/payment-info', authenticate, getPaymentInfo);
 
 export default router;

@@ -243,6 +243,7 @@ model Order {
   cancelReason        String?        @map("cancel_reason")
   paymentClaimedAt    DateTime?      @map("payment_claimed_at")
   paymentVerifiedAt   DateTime?      @map("payment_verified_at")
+  bankTransactionId   String?        @map("bank_transaction_id")
   pointsEarned        Int            @default(0) @map("points_earned")
   pointsRedeemed      Int            @default(0) @map("points_redeemed")
   createdAt           DateTime       @default(now()) @map("created_at")

@@ -2,7 +2,6 @@ import { prisma } from '../config/database';
 import { redis, KEYS, incrOrderSeq } from '../config/redis';
 import { generateQRToken } from './qr.service';
 import { sendOrderNotification } from './notification.service';
-import { generateUpiDeepLink } from '../utils/upi';
 import { validatePointsRedemption, redeemPoints } from './loyalty.service';
 import { OrderStatus } from '@prisma/client';
 
@@ -17,7 +16,13 @@ interface PlaceOrderInput {
 
 export interface PlaceOrderResult {
   order: Record<string, unknown>;
-  upiDeepLink: string | null;
+  payment: {
+    vpa: string;
+    payeeName: string;
+    amount: string;
+    transactionRef: string;
+    transactionNote: string;
+  } | null;
   upiAmount: number;
   pointsDiscount: number;
   walletDeduction: number;
@@ -204,16 +209,15 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     await sendOrderNotification(userId, order.id, orderNumber, OrderStatus.CONFIRMED);
   }
 
-  const upiDeepLink = upiAmount > 0
-    ? generateUpiDeepLink({
-        vendorUpiId: canteen.vendorUpiId!,
-        vendorUpiName: canteen.vendorUpiName || canteen.name,
-        amount: upiAmount,
-        orderNumber,
-      })
-    : null;
+  const payment = upiAmount > 0 ? {
+    vpa: canteen.vendorUpiId!,
+    payeeName: canteen.vendorUpiName || canteen.name,
+    amount: upiAmount.toFixed(2),
+    transactionRef: `${orderNumber}-${Date.now()}`,
+    transactionNote: orderNumber,
+  } : null;
 
-  return { order: order as unknown as Record<string, unknown>, upiDeepLink, upiAmount, pointsDiscount, walletDeduction, subtotal };
+  return { order: order as unknown as Record<string, unknown>, payment, upiAmount, pointsDiscount, walletDeduction, subtotal };
 }
 
 export async function cancelOrder(

@@ -49,7 +49,7 @@ export async function createOrder(req: AuthRequest, res: Response) {
     const result = await placeOrder({ userId: req.user!.id, ...v.data }, req.io);
     return res.status(201).json({
       order: result.order,
-      upiDeepLink: result.upiDeepLink,
+      payment: result.payment,
       upiAmount: result.upiAmount,
       pointsDiscount: result.pointsDiscount,
       walletDeduction: result.walletDeduction,
@@ -62,6 +62,7 @@ export async function createOrder(req: AuthRequest, res: Response) {
 
 export async function claimPayment(req: AuthRequest, res: Response) {
   const { id } = req.params;
+  const { bankTransactionId, bankResponseCode } = req.body as { bankTransactionId?: string; bankResponseCode?: string };
 
   const order = await prisma.order.findUnique({
     where: { id },
@@ -75,19 +76,51 @@ export async function claimPayment(req: AuthRequest, res: Response) {
 
   await prisma.order.update({
     where: { id },
-    data: { paymentStatus: 'PENDING_VERIFICATION', paymentClaimedAt: new Date() },
+    data: {
+      paymentStatus: 'PENDING_VERIFICATION',
+      paymentClaimedAt: new Date(),
+      bankTransactionId: bankTransactionId || null,
+    },
   });
 
-  // Notify vendor to check GPay
   const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
   ioServer?.to(`canteen:${order.canteenId}`).emit('payment:claimed', {
     orderId: id,
     orderNumber: order.orderNumber,
     amount: Number(order.totalAmount),
+    bankTransactionId: bankTransactionId || null,
     message: `Student claims payment for Order #${order.orderNumber} — check GPay for ₹${Number(order.totalAmount).toFixed(0)}`,
   });
 
   return res.json({ success: true, message: 'Payment claim submitted. Vendor is verifying.' });
+}
+
+export async function getPaymentInfo(req: AuthRequest, res: Response) {
+  const { id } = req.params;
+
+  const order = await prisma.order.findUnique({
+    where: { id },
+    select: { userId: true, paymentStatus: true, orderNumber: true, totalAmount: true, canteenId: true },
+  });
+  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.userId !== req.user!.id) return res.status(403).json({ error: 'Not your order' });
+  if (order.paymentStatus !== 'AWAITING_PAYMENT') {
+    return res.status(400).json({ error: 'Order is not awaiting payment' });
+  }
+
+  const canteen = await prisma.canteen.findUnique({
+    where: { id: order.canteenId },
+    select: { vendorUpiId: true, vendorUpiName: true, name: true },
+  });
+  if (!canteen?.vendorUpiId) return res.status(400).json({ error: 'Canteen UPI not configured' });
+
+  return res.json({
+    vpa: canteen.vendorUpiId,
+    payeeName: canteen.vendorUpiName || canteen.name,
+    amount: Number(order.totalAmount).toFixed(2),
+    transactionRef: `${order.orderNumber}-${Date.now()}`,
+    transactionNote: order.orderNumber,
+  });
 }
 
 export async function verifyPayment(req: AuthRequest, res: Response) {
