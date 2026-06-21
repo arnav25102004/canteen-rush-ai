@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native';
-import RNUpiPayment from 'react-native-upi-payment';
 import { useRouter } from 'expo-router';
 import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
@@ -41,28 +40,6 @@ export default function CheckoutScreen() {
     } catch { /* ignore */ }
   }
 
-  async function handlePaymentSuccess(successData: any, orderId: string) {
-    try {
-      await api.post(`/orders/${orderId}/claim-payment`, {
-        bankTransactionId: successData.txnId,
-        bankResponseCode: successData.responseCode,
-      });
-    } catch {
-      // Backend claim failed but bank confirmed — still navigate, vendor sees it on retry
-    }
-    router.replace({ pathname: '/order/[id]', params: { id: orderId } });
-    Alert.alert('Payment Successful', 'Your order has been placed!');
-  }
-
-  function handlePaymentFailure(failureData: any, orderId: string) {
-    if (failureData.message === 'No action taken') {
-      Alert.alert('Payment Cancelled', 'You can retry payment from your order screen.');
-    } else {
-      Alert.alert('Payment Failed', failureData.message || 'Please try again or use a different UPI app.');
-    }
-    router.replace({ pathname: '/order/[id]', params: { id: orderId } });
-  }
-
   async function handlePlaceOrder() {
     if (!canteenId) return;
     setPlacing(true);
@@ -75,24 +52,7 @@ export default function CheckoutScreen() {
       });
 
       clear();
-
-      if (!data.payment) {
-        // Fully covered by wallet/points
-        router.replace({ pathname: '/order/[id]', params: { id: data.order.id } });
-        return;
-      }
-
-      RNUpiPayment.initializePayment(
-        {
-          vpa: data.payment.vpa,
-          payeeName: data.payment.payeeName,
-          amount: data.payment.amount,
-          transactionRef: data.payment.transactionRef,
-          transactionNote: data.payment.transactionNote,
-        },
-        (successData: any) => handlePaymentSuccess(successData, data.order.id),
-        (failureData: any) => handlePaymentFailure(failureData, data.order.id)
-      );
+      router.replace({ pathname: '/order/[id]', params: { id: data.order.id } });
     } catch (err: any) {
       Alert.alert('Order Failed', err.response?.data?.error || 'Something went wrong. Please try again.');
     } finally {

@@ -1,8 +1,7 @@
-import { useEffect, useState, useCallback } from 'react';
-import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert } from 'react-native';
+import { useEffect, useState, useCallback, useRef } from 'react';
+import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator, Alert, Linking } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
-import RNUpiPayment from 'react-native-upi-payment';
 import api from '../../services/api';
 
 const STEPS = ['CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY', 'PICKED_UP'];
@@ -13,42 +12,33 @@ export default function OrderTrackingScreen() {
   const [order, setOrder] = useState<any>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [claiming, setClaiming] = useState(false);
+  const hasAutoOpenedUpi = useRef(false);
 
-  async function handlePaymentSuccess(successData: any) {
-    try {
-      await api.post(`/orders/${id}/claim-payment`, {
-        bankTransactionId: successData.txnId,
-        bankResponseCode: successData.responseCode,
-      });
-    } catch {
-      // ignore — navigate anyway, vendor sees it
-    }
-    load();
-    Alert.alert('Payment Successful', 'Waiting for vendor to confirm receipt.');
-  }
-
-  function handlePaymentFailure(failureData: any) {
-    if (failureData.message !== 'No action taken') {
-      Alert.alert('Payment Failed', failureData.message || 'Please try again.');
-    }
-  }
-
-  async function retryPayment() {
+  async function openUpiPayment() {
     try {
       const { data } = await api.get(`/orders/${id}/payment-info`);
-      RNUpiPayment.initializePayment(
-        {
-          vpa: data.vpa,
-          payeeName: data.payeeName,
-          amount: data.amount,
-          transactionRef: data.transactionRef,
-          transactionNote: data.transactionNote,
-        },
-        handlePaymentSuccess,
-        handlePaymentFailure
-      );
+      const url = `upi://pay?pa=${data.vpa}&pn=${encodeURIComponent(data.payeeName)}&am=${data.amount}&tr=${encodeURIComponent(data.transactionRef)}&tn=${encodeURIComponent(data.transactionNote)}&cu=INR`;
+      const canOpen = await Linking.canOpenURL(url);
+      if (canOpen) {
+        await Linking.openURL(url);
+      } else {
+        Alert.alert('No UPI App Found', `Please pay ₹${data.amount} to ${data.vpa} manually.\n\nReference: ${data.transactionNote}`);
+      }
     } catch (err: any) {
-      Alert.alert('Error', err.response?.data?.error || 'Could not retry payment. Try again.');
+      Alert.alert('Error', err.response?.data?.error || 'Could not open UPI. Try again.');
+    }
+  }
+
+  async function handleClaimPayment() {
+    setClaiming(true);
+    try {
+      await api.post(`/orders/${id}/claim-payment`);
+      load();
+    } catch (err: any) {
+      Alert.alert('Error', err.response?.data?.error || 'Could not submit payment claim. Try again.');
+    } finally {
+      setClaiming(false);
     }
   }
 
@@ -70,6 +60,14 @@ export default function OrderTrackingScreen() {
     const interval = setInterval(load, 5000);
     return () => clearInterval(interval);
   }, [order?.status, load]);
+
+  useEffect(() => {
+    if (!order) return;
+    if (order.paymentStatus === 'AWAITING_PAYMENT' && !hasAutoOpenedUpi.current) {
+      hasAutoOpenedUpi.current = true;
+      openUpiPayment();
+    }
+  }, [order?.paymentStatus]);
 
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#e94560" /></View>;
   if (!order) return <View style={styles.center}><Text>Order not found</Text></View>;
@@ -95,13 +93,21 @@ export default function OrderTrackingScreen() {
         </View>
       )}
 
-      {/* UPI payment pending — let student retry */}
+      {/* UPI payment pending */}
       {order.paymentStatus === 'AWAITING_PAYMENT' && (
         <View style={styles.payBanner}>
           <Text style={styles.payBannerTitle}>Payment Required</Text>
           <Text style={styles.payBannerSub}>Pay ₹{Number(order.totalAmount).toFixed(0)} to confirm your order</Text>
-          <TouchableOpacity style={styles.payNowBtn} onPress={retryPayment}>
-            <Text style={styles.payNowBtnText}>Pay Now via UPI</Text>
+          <TouchableOpacity style={styles.payNowBtn} onPress={openUpiPayment}>
+            <Text style={styles.payNowBtnText}>Open UPI App</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.claimBtn, claiming && { opacity: 0.6 }]}
+            onPress={handleClaimPayment}
+            disabled={claiming}>
+            {claiming
+              ? <ActivityIndicator color="#fff" size="small" />
+              : <Text style={styles.claimBtnText}>I've Paid — Confirm</Text>}
           </TouchableOpacity>
         </View>
       )}
@@ -191,6 +197,8 @@ const styles = StyleSheet.create({
   payBanner: { backgroundColor: '#fff7ed', borderRadius: 14, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#fed7aa', alignItems: 'center' },
   payBannerTitle: { fontSize: 16, fontWeight: '800', color: '#c2410c', marginBottom: 4 },
   payBannerSub: { fontSize: 13, color: '#9a3412', marginBottom: 12 },
-  payNowBtn: { backgroundColor: '#e94560', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 32, alignItems: 'center' },
+  payNowBtn: { backgroundColor: '#1a1a2e', borderRadius: 12, paddingVertical: 12, width: '100%', alignItems: 'center', marginBottom: 10 },
   payNowBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  claimBtn: { backgroundColor: '#10b981', borderRadius: 12, paddingVertical: 12, width: '100%', alignItems: 'center' },
+  claimBtnText: { color: '#fff', fontWeight: '700', fontSize: 15 },
 });
