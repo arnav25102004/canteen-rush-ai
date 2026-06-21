@@ -118,7 +118,7 @@ export async function getPaymentInfo(req: AuthRequest, res: Response) {
     vpa: canteen.vendorUpiId,
     payeeName: canteen.vendorUpiName || canteen.name,
     amount: Number(order.totalAmount).toFixed(2),
-    transactionRef: `${order.orderNumber}-${Date.now()}`,
+    transactionRef: `CR${Date.now()}`,
     transactionNote: order.orderNumber,
   });
 }

@@ -213,7 +213,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     vpa: canteen.vendorUpiId!,
     payeeName: canteen.vendorUpiName || canteen.name,
     amount: upiAmount.toFixed(2),
-    transactionRef: `${orderNumber}-${Date.now()}`,
+    transactionRef: `CR${Date.now()}`,
     transactionNote: orderNumber,
   } : null;
 
