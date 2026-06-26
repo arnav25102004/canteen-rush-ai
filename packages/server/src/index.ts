@@ -60,7 +60,13 @@ app.use(cors({
 }));
 app.use(compression());
 app.use(morgan('dev'));
-app.use(express.json({ limit: '10mb' }));
+app.use(express.json({
+  limit: '10mb',
+  verify: (req: any, _res, buf) => {
+    // rawBody needed by Razorpay webhook for HMAC signature verification
+    req.rawBody = buf;
+  },
+}));
 app.use(express.urlencoded({ extended: true }));
 
 // Attach io to requests

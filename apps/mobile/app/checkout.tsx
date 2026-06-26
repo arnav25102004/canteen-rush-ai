@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
+import RazorpayCheckout from 'react-native-razorpay';
 import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
 
@@ -23,11 +24,9 @@ export default function CheckoutScreen() {
   const pointsDiscount = REDEMPTION_TIERS.find(t => t.points === selectedPointsTier)?.discount || 0;
   const afterPoints = orderTotal - pointsDiscount;
   const walletApplied = Math.min(walletCredit, afterPoints);
-  const upiAmount = Math.max(0, afterPoints - walletApplied);
+  const amountDue = Math.max(0, afterPoints - walletApplied);
 
-  useEffect(() => {
-    loadLoyaltyAndWallet();
-  }, []);
+  useEffect(() => { loadLoyaltyAndWallet(); }, []);
 
   async function loadLoyaltyAndWallet() {
     try {
@@ -44,6 +43,7 @@ export default function CheckoutScreen() {
     if (!canteenId) return;
     setPlacing(true);
     try {
+      // Step 1: Create order on backend (returns Razorpay order details if vendor uses Razorpay)
       const { data } = await api.post('/orders', {
         canteenId,
         items: items.map(i => ({ menuItemId: i.menuItemId, quantity: i.quantity })),
@@ -51,16 +51,43 @@ export default function CheckoutScreen() {
         pointsToRedeem: selectedPointsTier || 0,
       });
 
+      const orderId: string = data.order.id;
+
+      // Step 2a: Free order (wallet/points fully cover it) — go straight to tracking
+      if (amountDue === 0 || !data.razorpay) {
+        clear();
+        router.replace({ pathname: '/order/[id]', params: { id: orderId } });
+        return;
+      }
+
+      // Step 2b: Open Razorpay payment sheet
+      const { razorpay } = data as {
+        razorpay: { orderId: string; amount: number; currency: string; keyId: string };
+      };
+
+      await RazorpayCheckout.open({
+        description: `Order at ${canteenName}`,
+        currency: razorpay.currency,
+        key: razorpay.keyId,
+        amount: String(razorpay.amount),   // paise
+        order_id: razorpay.orderId,
+        name: 'CanteenRush',
+        theme: { color: '#e94560' },
+      });
+
+      // Step 3: Payment captured — webhook updates the order in the background
+      // Navigate to tracking screen; it polls for CONFIRMED status
       clear();
-      router.replace({ pathname: '/order/[id]', params: { id: data.order.id } });
-    } catch (err: any) {
-      Alert.alert('Order Failed', err.response?.data?.error || 'Something went wrong. Please try again.');
+      router.replace({ pathname: '/order/[id]', params: { id: orderId } });
+
+    } catch (error: any) {
+      // Razorpay error code 2 = user dismissed the sheet — do nothing
+      if (error?.code === 2) return;
+      Alert.alert('Payment Failed', error?.description || error?.message || 'Something went wrong. Please try again.');
     } finally {
       setPlacing(false);
     }
   }
-
-  const availableTiers = REDEMPTION_TIERS.filter(t => t.points <= loyaltyPoints);
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: '#f8f9fa' }} contentContainerStyle={{ padding: 16 }}>
@@ -139,8 +166,8 @@ export default function CheckoutScreen() {
             </View>
           )}
           <View style={[styles.row, styles.totalRow]}>
-            <Text style={styles.totalLabel}>Pay via UPI</Text>
-            <Text style={styles.totalAmount}>₹{upiAmount.toFixed(0)}</Text>
+            <Text style={styles.totalLabel}>Amount Due</Text>
+            <Text style={styles.totalAmount}>₹{amountDue.toFixed(0)}</Text>
           </View>
         </View>
       )}
@@ -159,13 +186,13 @@ export default function CheckoutScreen() {
       </View>
 
       {/* Payment info */}
-      {upiAmount > 0 ? (
+      {amountDue > 0 ? (
         <View style={styles.payCard}>
-          <Text style={styles.payIcon}>📱</Text>
+          <Text style={styles.payIcon}>💳</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.payTitle}>Pay via UPI</Text>
+            <Text style={styles.payTitle}>Pay via Razorpay</Text>
             <Text style={styles.paySubtitle}>
-              You'll be taken to GPay/PhonePe to pay ₹{upiAmount.toFixed(0)} directly to the vendor
+              UPI, cards, netbanking — ₹{amountDue.toFixed(0)} charged securely
             </Text>
           </View>
         </View>
@@ -174,12 +201,12 @@ export default function CheckoutScreen() {
           <Text style={styles.payIcon}>✅</Text>
           <View style={{ flex: 1 }}>
             <Text style={[styles.payTitle, { color: '#15803d' }]}>Fully covered by wallet/points</Text>
-            <Text style={[styles.paySubtitle, { color: '#166534' }]}>No UPI payment needed</Text>
+            <Text style={[styles.paySubtitle, { color: '#166534' }]}>No payment needed</Text>
           </View>
         </View>
       )}
 
-      <Text style={styles.etaText}>Estimated time: 15–20 min after vendor confirms payment</Text>
+      <Text style={styles.etaText}>Estimated time: 15–20 min after order is confirmed</Text>
 
       <TouchableOpacity
         style={[styles.placeBtn, placing && styles.placeBtnDisabled]}
@@ -188,7 +215,7 @@ export default function CheckoutScreen() {
         {placing
           ? <ActivityIndicator color="#fff" />
           : <Text style={styles.placeBtnText}>
-              {upiAmount > 0 ? `Pay ₹${upiAmount.toFixed(0)} via UPI` : `Place Order — Free`}
+              {amountDue > 0 ? `Pay ₹${amountDue.toFixed(0)}` : 'Place Order — Free'}
             </Text>}
       </TouchableOpacity>
     </ScrollView>

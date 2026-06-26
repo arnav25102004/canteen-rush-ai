@@ -89,9 +89,10 @@ model Canteen {
   closingTime   String   @map("closing_time") // "20:00"
   contactPhone  String?  @map("contact_phone")
   avgPrepTime   Int      @default(15) @map("avg_prep_time")
-  vendorUpiId   String?  @map("vendor_upi_id")   // "punjabibites@oksbi"
-  vendorUpiName String?  @map("vendor_upi_name") // "Punjabi Bites"
-  institutionId String   @map("institution_id")
+  vendorUpiId       String?  @map("vendor_upi_id")        // "punjabibites@oksbi"
+  vendorUpiName     String?  @map("vendor_upi_name")       // "Punjabi Bites"
+  razorpayAccountId String?  @map("razorpay_account_id")   // "acc_XXXXXXXXXX" from Razorpay Route
+  institutionId     String   @map("institution_id")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -136,7 +137,8 @@ model MenuItem {
   categoryId      String   @map("category_id")
   name            String
   description     String?
-  price           Decimal  @db.Decimal(10, 2)
+  price           Decimal  @db.Decimal(10, 2)                   // app price shown to students
+  counterPrice    Decimal? @db.Decimal(10, 2) @map("counter_price") // vendor's actual price; difference is platform fee
   imageUrl        String?  @map("image_url")
   isVeg           Boolean  @default(true) @map("is_veg")
   isJain          Boolean  @default(false) @map("is_jain")
@@ -207,6 +209,7 @@ enum PaymentMethod {
   UPI_DIRECT
   WALLET
   CASH
+  RAZORPAY
 }
 
 enum PaymentStatus {
@@ -233,6 +236,10 @@ model Order {
   discountAmount      Decimal        @default(0) @db.Decimal(10, 2) @map("discount_amount")
   totalAmount         Decimal        @db.Decimal(10, 2) @map("total_amount")
   upiOrderNote        String?        @map("upi_order_note")
+  razorpayOrderId     String?        @unique @map("razorpay_order_id")   // "order_XXXXXXXXXX"
+  razorpayPaymentId   String?        @unique @map("razorpay_payment_id") // "pay_XXXXXXXXXX"
+  razorpayTransferId  String?        @map("razorpay_transfer_id")        // Route transfer ID
+  pickupCode          String?        @map("pickup_code")                 // short human-readable e.g. "CR-042"
   qrCode              String?        @map("qr_code")
   qrScanned           Boolean        @default(false) @map("qr_scanned")
   specialInstructions String?        @map("special_instructions")

@@ -5,8 +5,12 @@ import api from '../../../lib/api';
 import { io, Socket } from 'socket.io-client';
 
 interface Order {
-  id: string; orderNumber: string; status: string; totalAmount: number;
-  paymentStatus: string; upiOrderNote?: string;
+  id: string;
+  orderNumber: string;
+  status: string;
+  paymentStatus: string;
+  totalAmount: number;
+  pickupCode?: string;
   createdAt: string;
   user: { name: string };
   items: { quantity: number; menuItem: { name: string } }[];
@@ -26,7 +30,7 @@ export default function VendorDashboard() {
       api.get('/orders/vendor/list').catch(() => ({ data: { orders: [] } })),
     ]);
     if (statsRes.data) setStats(statsRes.data);
-    if (ordersRes.data.orders) setLiveOrders(ordersRes.data.orders.slice(0, 10));
+    if (ordersRes.data.orders) setLiveOrders(ordersRes.data.orders.slice(0, 20));
   }, []);
 
   useEffect(() => {
@@ -41,9 +45,7 @@ export default function VendorDashboard() {
         reconnectionAttempts: 5,
       });
       s.emit('join:canteen', { canteenId });
-      s.on('order:new', ({ order }: { order: Order }) => {
-        setLiveOrders((prev) => [order, ...prev].slice(0, 10));
-      });
+      s.on('order:new', () => loadData());
       s.on('order:status_update', () => loadData());
       setSocket(s);
       return () => { s.disconnect(); };
@@ -55,17 +57,13 @@ export default function VendorDashboard() {
     loadData();
   }
 
-  async function verifyPayment(orderId: string, confirmed: boolean) {
-    await api.patch(`/orders/vendor/${orderId}/verify-payment`, { confirmed });
-    loadData();
-  }
-
   const statusColor: Record<string, string> = {
     CONFIRMED: 'bg-yellow-100 text-yellow-800',
     ACCEPTED: 'bg-blue-100 text-blue-800',
     PREPARING: 'bg-orange-100 text-orange-800',
     READY: 'bg-green-100 text-green-800',
     PICKED_UP: 'bg-gray-100 text-gray-600',
+    PENDING: 'bg-purple-100 text-purple-700',
   };
 
   const nextAction: Record<string, { label: string; next: string; color: string }> = {
@@ -107,48 +105,34 @@ export default function VendorDashboard() {
             ) : (
               liveOrders.map((order) => (
                 <div key={order.id} className="p-4">
-                  {/* Payment verification banner */}
-                  {order.paymentStatus === 'PENDING_VERIFICATION' && (
-                    <div className="mb-3 bg-amber-50 border border-amber-200 rounded-lg p-3">
-                      <p className="text-sm font-semibold text-amber-800 mb-1">
-                        🟡 Student claims payment sent — ₹{Number(order.totalAmount).toFixed(0)}
+                  {/* Payment still processing (Razorpay webhook not yet fired) */}
+                  {order.status === 'PENDING' && order.paymentStatus === 'AWAITING_PAYMENT' && (
+                    <div className="mb-3 bg-purple-50 border border-purple-200 rounded-lg p-3">
+                      <p className="text-sm text-purple-700">
+                        ⏳ Payment processing — order will appear once confirmed
                       </p>
-                      {order.upiOrderNote && (
-                        <p className="text-xs text-amber-700 mb-2">Check GPay for: <strong>{order.upiOrderNote}</strong></p>
-                      )}
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => verifyPayment(order.id, true)}
-                          className="flex-1 text-sm bg-green-500 text-white py-1.5 rounded-lg font-medium hover:bg-green-600"
-                        >
-                          ✅ Received
-                        </button>
-                        <button
-                          onClick={() => verifyPayment(order.id, false)}
-                          className="flex-1 text-sm bg-red-500 text-white py-1.5 rounded-lg font-medium hover:bg-red-600"
-                        >
-                          ❌ Not Received
-                        </button>
-                      </div>
                     </div>
                   )}
 
                   <div className="flex items-center gap-4">
                     <div className="flex-1">
                       <div className="flex items-center gap-2 mb-1">
-                        <span className="font-medium">{order.orderNumber}</span>
+                        <span className="font-bold text-lg">
+                          {order.pickupCode ?? order.orderNumber}
+                        </span>
                         <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor[order.status] || 'bg-gray-100'}`}>
                           {order.status}
                         </span>
-                        {order.paymentStatus === 'AWAITING_PAYMENT' && (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-700">⏳ Awaiting Payment</span>
-                        )}
-                        {order.paymentStatus === 'VERIFIED' && (
+                        {order.paymentStatus === 'PAID' && (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">✅ Paid</span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500">{order.user?.name} • {order.items?.map(i => `${i.menuItem.name} ×${i.quantity}`).join(', ')}</p>
-                      {order.slot && <p className="text-xs text-gray-400">Slot: {order.slot.startTime}–{order.slot.endTime}</p>}
+                      <p className="text-sm text-gray-500">
+                        {order.user?.name} • {order.items?.map(i => `${i.menuItem.name} ×${i.quantity}`).join(', ')}
+                      </p>
+                      {order.slot && (
+                        <p className="text-xs text-gray-400">Slot: {order.slot.startTime}–{order.slot.endTime}</p>
+                      )}
                     </div>
                     <div className="text-right">
                       <p className="font-semibold">₹{Number(order.totalAmount).toFixed(0)}</p>

@@ -1,3 +1,4 @@
+import Razorpay from 'razorpay';
 import { prisma } from '../config/database';
 import { redis, KEYS, incrOrderSeq } from '../config/redis';
 import { generateQRToken } from './qr.service';
@@ -23,6 +24,12 @@ export interface PlaceOrderResult {
     transactionRef: string;
     transactionNote: string;
   } | null;
+  razorpay: {
+    orderId: string;
+    amount: number;   // in paise
+    currency: string;
+    keyId: string;
+  } | null;
   upiAmount: number;
   pointsDiscount: number;
   walletDeduction: number;
@@ -45,7 +52,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   // Validate items belong to this canteen and are available
   const menuItems = await prisma.menuItem.findMany({
     where: { id: { in: items.map((i) => i.menuItemId) }, canteenId },
-    select: { id: true, name: true, price: true, isAvailable: true },
+    select: { id: true, name: true, price: true, counterPrice: true, isAvailable: true },
   });
 
   if (menuItems.length !== items.length) {
@@ -57,14 +64,17 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     throw new Error(`${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
   }
 
-  // Check canteen has UPI configured
+  // Fetch canteen — check for Razorpay or UPI configuration
   const canteen = await prisma.canteen.findUnique({
     where: { id: canteenId },
-    select: { id: true, name: true, vendorUpiId: true, vendorUpiName: true },
+    select: { id: true, name: true, vendorUpiId: true, vendorUpiName: true, razorpayAccountId: true },
   });
   if (!canteen) throw new Error('Canteen not found');
-  if (!canteen.vendorUpiId) {
-    throw new Error('This canteen has not set up UPI payments yet. Please contact the vendor.');
+
+  const useRazorpay = !!canteen.razorpayAccountId;
+
+  if (!useRazorpay && !canteen.vendorUpiId) {
+    throw new Error('This canteen has not set up payments yet. Please contact the vendor.');
   }
 
   // Pre-validate slot
@@ -83,34 +93,41 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   if (!pointsValidation.valid) throw new Error(pointsValidation.error || 'Invalid points redemption');
   const pointsDiscount = pointsValidation.discountAmount;
 
-  // Calculate subtotal from DB prices
+  // Calculate subtotal (app price) and counter price total from DB
   let subtotal = 0;
+  let totalCounterPrice = 0;
   const orderItems = items.map((item) => {
     const mi = menuItems.find((m) => m.id === item.menuItemId)!;
-    const totalPrice = Number(mi.price) * item.quantity;
+    const appPrice = Number(mi.price);
+    const counterPrice = Number(mi.counterPrice ?? mi.price); // fall back to appPrice if counterPrice not set
+    const totalPrice = appPrice * item.quantity;
     subtotal += totalPrice;
+    totalCounterPrice += counterPrice * item.quantity;
     return {
       menuItemId: item.menuItemId,
       quantity: item.quantity,
-      unitPrice: Number(mi.price),
+      unitPrice: appPrice,
       totalPrice,
       customizations: item.customizations ?? {},
       notes: item.notes,
     };
   });
 
-  // Apply wallet credit (refund balance) automatically
+  // Apply wallet credit automatically
   const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
   const walletCredit = wallet ? Number(wallet.balance) : 0;
   const afterPointsDiscount = subtotal - pointsDiscount;
   const walletDeduction = Math.min(walletCredit, afterPointsDiscount);
   const upiAmount = Math.max(0, afterPointsDiscount - walletDeduction);
-  const totalAmount = upiAmount; // what actually needs to be paid via UPI (wallet already applied)
+  const totalAmount = upiAmount;
+
+  // Determine payment method and initial status
+  const isFreeOrder = totalAmount === 0;
+  const paymentMethod = isFreeOrder ? 'WALLET' : (useRazorpay ? 'RAZORPAY' : 'UPI_DIRECT');
+  const paymentStatus = isFreeOrder || !useRazorpay ? 'PAID' : 'AWAITING_PAYMENT';
+  const orderStatus = isFreeOrder || !useRazorpay ? OrderStatus.CONFIRMED : OrderStatus.PENDING;
 
   const orderNumber = await generateOrderNumber(canteenId);
-  const paymentMethod = upiAmount > 0 ? 'UPI_DIRECT' : 'WALLET';
-  const paymentStatus = upiAmount > 0 ? 'AWAITING_PAYMENT' : 'PAID';
-  const orderStatus = upiAmount > 0 ? OrderStatus.PENDING : OrderStatus.CONFIRMED;
 
   const order = await prisma.$transaction(async (tx) => {
     // Re-check slot inside transaction
@@ -185,7 +202,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
       await tx.pickupSlot.update({ where: { id: slotId }, data: { currentOrders: { increment: 1 } } });
     }
 
-    // Generate QR token (available after vendor verifies payment)
+    // Generate QR token upfront (vendor scans this at pickup)
     const qrToken = generateQRToken({ orderId: newOrder.id, userId, orderNumber, canteenId });
     await tx.order.update({ where: { id: newOrder.id }, data: { qrCode: qrToken } });
 
@@ -195,21 +212,64 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   if (slotId) await redis.del(KEYS.slotAvailability(slotId));
 
   // Bump totalOrders counters (non-critical)
-  await prisma.$transaction(
+  prisma.$transaction(
     items.map((item) =>
       prisma.menuItem.update({ where: { id: item.menuItemId }, data: { totalOrders: { increment: item.quantity } } })
     )
-  );
+  ).catch((err) => console.error('[Order] Failed to bump totalOrders:', err));
 
   const ioServer = io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
 
-  // If fully paid (wallet/points covered all), notify vendor immediately
-  if (upiAmount <= 0) {
+  // For Razorpay orders, the webhook fires order:new after payment capture
+  // For immediate (free / UPI) orders, emit now and notify student
+  if (!useRazorpay || isFreeOrder) {
     ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order });
     await sendOrderNotification(userId, order.id, orderNumber, OrderStatus.CONFIRMED);
   }
 
-  const payment = upiAmount > 0 ? {
+  // Create Razorpay order for chargeable non-free orders
+  let razorpayDetails: PlaceOrderResult['razorpay'] = null;
+
+  if (useRazorpay && !isFreeOrder) {
+    const rzp = new Razorpay({
+      key_id: process.env.RAZORPAY_KEY_ID!,
+      key_secret: process.env.RAZORPAY_KEY_SECRET!,
+    });
+
+    const amountPaise = Math.round(totalAmount * 100);
+    // Vendor receives their counter price, capped at what student actually pays
+    const counterPaise = Math.min(Math.round(totalCounterPrice * 100), amountPaise);
+
+    const rzpOrder = await rzp.orders.create({
+      amount: amountPaise,
+      currency: 'INR',
+      receipt: `cr_${orderNumber}`.slice(0, 40),
+      transfers: [
+        {
+          account: canteen.razorpayAccountId!,
+          amount: counterPaise,
+          currency: 'INR',
+          on_hold: 0,
+        },
+      ],
+      notes: { canteenId, userId, orderNumber },
+    });
+
+    await prisma.order.update({
+      where: { id: order.id },
+      data: { razorpayOrderId: rzpOrder.id },
+    });
+
+    razorpayDetails = {
+      orderId: rzpOrder.id,
+      amount: amountPaise,
+      currency: 'INR',
+      keyId: process.env.RAZORPAY_KEY_ID!,
+    };
+  }
+
+  // Legacy UPI payment info (for canteens without Razorpay)
+  const payment = (!useRazorpay && upiAmount > 0) ? {
     vpa: canteen.vendorUpiId!,
     payeeName: canteen.vendorUpiName || canteen.name,
     amount: upiAmount.toFixed(2),
@@ -217,7 +277,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     transactionNote: orderNumber,
   } : null;
 
-  return { order: order as unknown as Record<string, unknown>, payment, upiAmount, pointsDiscount, walletDeduction, subtotal };
+  return { order: order as unknown as Record<string, unknown>, payment, razorpay: razorpayDetails, upiAmount, pointsDiscount, walletDeduction, subtotal };
 }
 
 export async function cancelOrder(
@@ -252,7 +312,7 @@ export async function cancelOrder(
       },
     });
 
-    // Refund wallet for orders where payment was verified (UPI) or wallet-paid
+    // Refund wallet for orders where payment was verified/paid
     const shouldRefund =
       order.paymentStatus === 'VERIFIED' ||
       order.paymentStatus === 'PAID';

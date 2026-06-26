@@ -1,7 +1,10 @@
 import { Router } from 'express';
-
-// Razorpay payment routes removed — students now pay vendors directly via UPI deep links.
-// See order routes: POST /orders/:id/claim-payment and PATCH /vendor/orders/:id/verify-payment
+import { razorpayWebhook } from '../controllers/payment.controller';
 
 const router = Router();
+
+// No auth middleware — Razorpay calls this server-to-server
+// Signature is verified inside the handler using rawBody + RAZORPAY_WEBHOOK_SECRET
+router.post('/webhook', razorpayWebhook);
+
 export default router;

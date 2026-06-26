@@ -50,6 +50,7 @@ export async function createOrder(req: AuthRequest, res: Response) {
     return res.status(201).json({
       order: result.order,
       payment: result.payment,
+      razorpay: result.razorpay,
       upiAmount: result.upiAmount,
       pointsDiscount: result.pointsDiscount,
       walletDeduction: result.walletDeduction,

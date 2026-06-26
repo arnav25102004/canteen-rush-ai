@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "ChristEats",
-    "slug": "christeats",
+    "name": "CanteenRush",
+    "slug": "christ-eats",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "scheme": "christeats",
+    "scheme": "canteenrush",
     "userInterfaceStyle": "automatic",
     "splash": {
       "image": "./assets/splash.png",
@@ -14,21 +14,26 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.christuniversity.eats"
+      "bundleIdentifier": "com.canteenrush.app"
     },
     "android": {
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#1a1a2e"
       },
-      "package": "com.christuniversity.eats",
+      "package": "com.canteenrush.app",
+      "googleServicesFile": "./google-services.json",
       "permissions": [
-        "android.permission.CAMERA"
+        "android.permission.CAMERA",
+        "android.permission.INTERNET",
+        "android.permission.VIBRATE",
+        "android.permission.RECEIVE_BOOT_COMPLETED"
       ]
     },
     "plugins": [
       "expo-router",
-      "expo-camera"
+      "expo-camera",
+      "react-native-razorpay"
     ],
     "experiments": {
       "typedRoutes": true
