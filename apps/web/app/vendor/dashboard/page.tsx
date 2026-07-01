@@ -9,6 +9,7 @@ interface Order {
   orderNumber: string;
   status: string;
   paymentStatus: string;
+  paymentMethod: string;
   totalAmount: number;
   pickupCode?: string;
   createdAt: string;
@@ -123,9 +124,13 @@ export default function VendorDashboard() {
                         <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor[order.status] || 'bg-gray-100'}`}>
                           {order.status}
                         </span>
-                        {order.paymentStatus === 'PAID' && (
+                        {order.paymentMethod === 'CASH' ? (
+                          <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-semibold">
+                            💵 Collect Cash
+                          </span>
+                        ) : order.paymentStatus === 'PAID' ? (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">✅ Paid</span>
-                        )}
+                        ) : null}
                       </div>
                       <p className="text-sm text-gray-500">
                         {order.user?.name} • {order.items?.map(i => `${i.menuItem.name} ×${i.quantity}`).join(', ')}

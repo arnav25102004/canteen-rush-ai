@@ -1,5 +1,5 @@
 import axios from 'axios';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { auth } from '../firebaseConfig';
 import { CONFIG } from '../config';
 
 const api = axios.create({
@@ -9,8 +9,12 @@ const api = axios.create({
 });
 
 api.interceptors.request.use(async (config) => {
-  const token = await AsyncStorage.getItem('auth_token');
-  if (token) config.headers['Authorization'] = `Bearer ${token}`;
+  const firebaseUser = auth.currentUser;
+  if (firebaseUser) {
+    // Always get a fresh/cached token — Firebase auto-refreshes if near expiry
+    const token = await firebaseUser.getIdToken(false);
+    config.headers['Authorization'] = `Bearer ${token}`;
+  }
   return config;
 });
 
