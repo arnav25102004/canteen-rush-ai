@@ -1,9 +1,10 @@
 'use client';
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import Sidebar from '../../../components/shared/Sidebar';
 import api from '../../../lib/api';
 import { io, Socket } from 'socket.io-client';
 
+interface OrderItem { quantity: number; menuItem: { name: string } }
 interface Order {
   id: string;
   orderNumber: string;
@@ -14,148 +15,233 @@ interface Order {
   pickupCode?: string;
   createdAt: string;
   user: { name: string };
-  items: { quantity: number; menuItem: { name: string } }[];
+  items: OrderItem[];
   slot: { startTime: string; endTime: string } | null;
 }
-
 interface Stats { totalOrders: number; totalRevenue: number; avgPrepTimeMinutes: number }
+
+// What the single action button does per status
+const ACTION: Record<string, { label: string; next: string; color: string }> = {
+  CONFIRMED: { label: 'Accept & Start', next: 'PREPARING', color: '#f59e0b' },
+  ACCEPTED:  { label: 'Mark Preparing', next: 'PREPARING', color: '#f59e0b' },
+  PREPARING: { label: '✓ Ready for Pickup', next: 'READY',    color: '#10b981' },
+};
+
+const STATUS_STYLE: Record<string, { bg: string; text: string; dot: string; label: string }> = {
+  CONFIRMED: { bg: '#fef9c3', text: '#854d0e', dot: '#eab308', label: 'New Order'  },
+  ACCEPTED:  { bg: '#dbeafe', text: '#1e3a8a', dot: '#3b82f6', label: 'Accepted'   },
+  PREPARING: { bg: '#ffedd5', text: '#7c2d12', dot: '#f97316', label: 'Preparing'  },
+  READY:     { bg: '#dcfce7', text: '#14532d', dot: '#22c55e', label: 'Ready!'     },
+  PENDING:   { bg: '#f3e8ff', text: '#581c87', dot: '#a855f7', label: 'Pending'    },
+};
+
+function timeAgo(iso: string) {
+  const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins === 1) return '1 min ago';
+  return `${mins} mins ago`;
+}
 
 export default function VendorDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
-  const [liveOrders, setLiveOrders] = useState<Order[]>([]);
+  const [orders, setOrders] = useState<Order[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const loadingRef = useRef(false);
 
   const loadData = useCallback(async () => {
-    const [statsRes, ordersRes] = await Promise.all([
-      api.get('/analytics/vendor/summary?period=today').catch(() => ({ data: null })),
-      api.get('/orders/vendor/list').catch(() => ({ data: { orders: [] } })),
-    ]);
-    if (statsRes.data) setStats(statsRes.data);
-    if (ordersRes.data.orders) setLiveOrders(ordersRes.data.orders.slice(0, 20));
+    if (loadingRef.current) return; // debounce — skip if already fetching
+    loadingRef.current = true;
+    try {
+      const [statsRes, ordersRes] = await Promise.all([
+        api.get('/analytics/vendor/summary?period=today').catch(() => ({ data: null })),
+        api.get('/orders/vendor/list').catch(() => ({ data: { orders: [] } })),
+      ]);
+      if (statsRes.data) setStats(statsRes.data);
+      if (ordersRes.data.orders) setOrders(ordersRes.data.orders.slice(0, 40));
+    } finally {
+      loadingRef.current = false;
+    }
   }, []);
 
   useEffect(() => {
     loadData();
-
     const canteenId = localStorage.getItem('canteen_id');
-    if (canteenId) {
-      const s = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'https://canteen-rush-ai.onrender.com', {
-        transports: ['websocket', 'polling'],
-        reconnection: true,
-        reconnectionDelay: 1000,
-        reconnectionAttempts: 5,
-      });
-      s.emit('join:canteen', { canteenId });
-      s.on('order:new', () => loadData());
-      s.on('order:status_update', () => loadData());
-      setSocket(s);
-      return () => { s.disconnect(); };
-    }
+    if (!canteenId) return;
+
+    const s = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'https://canteen-rush-ai.onrender.com', {
+      transports: ['websocket', 'polling'],
+      reconnection: true,
+      reconnectionDelay: 1000,
+      reconnectionAttempts: 10,
+    });
+    s.emit('join:canteen', { canteenId });
+    s.on('order:new', () => loadData());
+    s.on('order:status_update', () => loadData());
+    setSocket(s);
+    return () => { s.disconnect(); };
   }, [loadData]);
 
-  async function markStatus(orderId: string, status: string) {
-    await api.patch(`/orders/vendor/${orderId}/status`, { status });
-    loadData();
+  async function markStatus(orderId: string, next: string) {
+    await api.patch(`/orders/vendor/${orderId}/status`, { status: next });
+    // Optimistic update
+    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: next } : o));
   }
 
-  const statusColor: Record<string, string> = {
-    CONFIRMED: 'bg-yellow-100 text-yellow-800',
-    ACCEPTED: 'bg-blue-100 text-blue-800',
-    PREPARING: 'bg-orange-100 text-orange-800',
-    READY: 'bg-green-100 text-green-800',
-    PICKED_UP: 'bg-gray-100 text-gray-600',
-    PENDING: 'bg-purple-100 text-purple-700',
-  };
-
-  const nextAction: Record<string, { label: string; next: string; color: string }> = {
-    CONFIRMED: { label: 'Accept', next: 'ACCEPTED', color: 'bg-blue-500' },
-    ACCEPTED: { label: 'Start Preparing', next: 'PREPARING', color: 'bg-orange-500' },
-    PREPARING: { label: 'Mark Ready', next: 'READY', color: 'bg-green-500' },
-  };
+  // Group by status for column layout
+  const active  = orders.filter(o => ['CONFIRMED', 'ACCEPTED', 'PREPARING'].includes(o.status));
+  const ready   = orders.filter(o => o.status === 'READY');
+  const pending = orders.filter(o => o.status === 'PENDING');
 
   return (
-    <div className="flex min-h-screen">
+    <div style={{ display: 'flex', minHeight: '100vh', background: '#0f172a' }}>
       <Sidebar />
-      <main className="flex-1 p-8 bg-gray-50">
-        <h1 className="text-2xl font-bold text-gray-800 mb-6">Today's Dashboard</h1>
+      <main style={{ flex: 1, padding: '28px 32px', overflowY: 'auto' }}>
+
+        {/* Header */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 24 }}>
+          <div>
+            <h1 style={{ color: '#f1f5f9', fontSize: 26, fontWeight: 800, margin: 0 }}>Kitchen Display</h1>
+            <p style={{ color: '#64748b', fontSize: 13, margin: '4px 0 0' }}>
+              {active.length + ready.length} active · {pending.length} awaiting payment
+            </p>
+          </div>
+          <button
+            onClick={loadData}
+            style={{ background: '#1e293b', color: '#94a3b8', border: '1px solid #334155', borderRadius: 10, padding: '8px 18px', cursor: 'pointer', fontSize: 13 }}
+          >
+            ↻ Refresh
+          </button>
+        </div>
 
         {/* Stats */}
-        <div className="grid grid-cols-3 gap-4 mb-8">
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 32 }}>
           {[
-            { label: 'Total Orders', value: stats?.totalOrders ?? '—', icon: '📋' },
-            { label: 'Revenue', value: stats?.totalRevenue ? `₹${stats.totalRevenue}` : '—', icon: '💰' },
-            { label: 'Avg Prep Time', value: stats?.avgPrepTimeMinutes ? `${stats.avgPrepTimeMinutes} min` : '—', icon: '⏱️' },
-          ].map((s) => (
-            <div key={s.label} className="bg-white rounded-xl p-6 shadow-sm">
-              <p className="text-2xl mb-2">{s.icon}</p>
-              <p className="text-2xl font-bold text-gray-800">{s.value}</p>
-              <p className="text-sm text-gray-500">{s.label}</p>
+            { label: 'Orders Today', value: stats?.totalOrders ?? '—', icon: '📋' },
+            { label: 'Revenue',      value: stats?.totalRevenue ? `₹${stats.totalRevenue}` : '—', icon: '💰' },
+            { label: 'Avg Prep',     value: stats?.avgPrepTimeMinutes ? `${stats.avgPrepTimeMinutes} min` : '—', icon: '⏱' },
+          ].map(s => (
+            <div key={s.label} style={{ background: '#1e293b', borderRadius: 14, padding: '20px 24px', border: '1px solid #334155' }}>
+              <div style={{ fontSize: 22, marginBottom: 8 }}>{s.icon}</div>
+              <div style={{ color: '#f1f5f9', fontSize: 24, fontWeight: 800 }}>{s.value}</div>
+              <div style={{ color: '#64748b', fontSize: 13 }}>{s.label}</div>
             </div>
           ))}
         </div>
 
-        {/* Live Orders */}
-        <div className="bg-white rounded-xl shadow-sm">
-          <div className="p-6 border-b flex items-center justify-between">
-            <h2 className="font-semibold text-gray-800">Live Orders</h2>
-            <button onClick={loadData} className="text-sm text-blue-500 hover:underline">Refresh</button>
+        {/* Order Cards Grid */}
+        {active.length === 0 && ready.length === 0 && pending.length === 0 ? (
+          <div style={{ textAlign: 'center', color: '#475569', marginTop: 80, fontSize: 18 }}>
+            No active orders right now
           </div>
-          <div className="divide-y">
-            {liveOrders.length === 0 ? (
-              <p className="p-8 text-center text-gray-400">No active orders</p>
-            ) : (
-              liveOrders.map((order) => (
-                <div key={order.id} className="p-4">
-                  {/* Payment still processing (Razorpay webhook not yet fired) */}
-                  {order.status === 'PENDING' && order.paymentStatus === 'AWAITING_PAYMENT' && (
-                    <div className="mb-3 bg-purple-50 border border-purple-200 rounded-lg p-3">
-                      <p className="text-sm text-purple-700">
-                        ⏳ Payment processing — order will appear once confirmed
-                      </p>
+        ) : (
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: 20 }}>
+            {[...pending, ...active, ...ready].map(order => {
+              const style = STATUS_STYLE[order.status] || STATUS_STYLE.CONFIRMED;
+              const action = ACTION[order.status];
+              return (
+                <div
+                  key={order.id}
+                  style={{
+                    background: '#1e293b',
+                    borderRadius: 18,
+                    border: `2px solid ${style.dot}40`,
+                    padding: 20,
+                    display: 'flex',
+                    flexDirection: 'column',
+                    gap: 12,
+                    boxShadow: order.status === 'READY' ? `0 0 24px ${style.dot}50` : 'none',
+                  }}
+                >
+                  {/* Top row — status badge + time */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{
+                      background: style.bg,
+                      color: style.text,
+                      borderRadius: 20,
+                      padding: '4px 12px',
+                      fontSize: 12,
+                      fontWeight: 700,
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 6,
+                    }}>
+                      <span style={{ width: 7, height: 7, borderRadius: '50%', background: style.dot, display: 'inline-block' }} />
+                      {style.label}
+                    </span>
+                    <span style={{ color: '#64748b', fontSize: 12 }}>{timeAgo(order.createdAt)}</span>
+                  </div>
+
+                  {/* Order number + customer */}
+                  <div>
+                    <div style={{ color: '#f1f5f9', fontSize: 20, fontWeight: 800, letterSpacing: 1 }}>
+                      {order.pickupCode ?? order.orderNumber}
                     </div>
+                    <div style={{ color: '#94a3b8', fontSize: 14, marginTop: 2 }}>{order.user?.name}</div>
+                  </div>
+
+                  {/* Items */}
+                  <div style={{ background: '#0f172a', borderRadius: 10, padding: '10px 14px', display: 'flex', flexDirection: 'column', gap: 6 }}>
+                    {order.items?.map((item, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between' }}>
+                        <span style={{ color: '#cbd5e1', fontSize: 14 }}>{item.menuItem.name}</span>
+                        <span style={{ color: '#64748b', fontSize: 14, fontWeight: 600 }}>×{item.quantity}</span>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Slot + payment */}
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <span style={{ color: '#64748b', fontSize: 12 }}>
+                      {order.slot ? `⏰ ${order.slot.startTime}–${order.slot.endTime}` : 'Walk-in'}
+                    </span>
+                    {order.paymentMethod === 'CASH' ? (
+                      <span style={{ background: '#fef9c3', color: '#854d0e', borderRadius: 8, padding: '3px 10px', fontSize: 12, fontWeight: 700 }}>
+                        💵 Collect Cash
+                      </span>
+                    ) : order.paymentStatus === 'PAID' ? (
+                      <span style={{ background: '#dcfce7', color: '#14532d', borderRadius: 8, padding: '3px 10px', fontSize: 12, fontWeight: 700 }}>
+                        ✅ Paid
+                      </span>
+                    ) : null}
+                  </div>
+
+                  {/* Amount */}
+                  <div style={{ color: '#f1f5f9', fontSize: 22, fontWeight: 800 }}>
+                    ₹{Number(order.totalAmount).toFixed(0)}
+                  </div>
+
+                  {/* Single action button */}
+                  {action && (
+                    <button
+                      onClick={() => markStatus(order.id, action.next)}
+                      style={{
+                        background: action.color,
+                        color: '#fff',
+                        border: 'none',
+                        borderRadius: 12,
+                        padding: '14px',
+                        fontSize: 15,
+                        fontWeight: 700,
+                        cursor: 'pointer',
+                        width: '100%',
+                        letterSpacing: 0.3,
+                      }}
+                    >
+                      {action.label}
+                    </button>
                   )}
 
-                  <div className="flex items-center gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-center gap-2 mb-1">
-                        <span className="font-bold text-lg">
-                          {order.pickupCode ?? order.orderNumber}
-                        </span>
-                        <span className={`text-xs px-2 py-0.5 rounded-full ${statusColor[order.status] || 'bg-gray-100'}`}>
-                          {order.status}
-                        </span>
-                        {order.paymentMethod === 'CASH' ? (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-yellow-100 text-yellow-800 font-semibold">
-                            💵 Collect Cash
-                          </span>
-                        ) : order.paymentStatus === 'PAID' ? (
-                          <span className="text-xs px-2 py-0.5 rounded-full bg-green-100 text-green-700">✅ Paid</span>
-                        ) : null}
-                      </div>
-                      <p className="text-sm text-gray-500">
-                        {order.user?.name} • {order.items?.map(i => `${i.menuItem.name} ×${i.quantity}`).join(', ')}
-                      </p>
-                      {order.slot && (
-                        <p className="text-xs text-gray-400">Slot: {order.slot.startTime}–{order.slot.endTime}</p>
-                      )}
+                  {/* Ready state — just a glow, no button needed */}
+                  {order.status === 'READY' && (
+                    <div style={{ textAlign: 'center', color: '#22c55e', fontSize: 14, fontWeight: 700, padding: '8px 0' }}>
+                      ✓ Waiting for student pickup
                     </div>
-                    <div className="text-right">
-                      <p className="font-semibold">₹{Number(order.totalAmount).toFixed(0)}</p>
-                      {nextAction[order.status] && (
-                        <button
-                          onClick={() => markStatus(order.id, nextAction[order.status].next)}
-                          className={`mt-1 text-xs text-white px-3 py-1 rounded-lg ${nextAction[order.status].color}`}
-                        >
-                          {nextAction[order.status].label}
-                        </button>
-                      )}
-                    </div>
-                  </div>
+                  )}
                 </div>
-              ))
-            )}
+              );
+            })}
           </div>
-        </div>
+        )}
       </main>
     </div>
   );
