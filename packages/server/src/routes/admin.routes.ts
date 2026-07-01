@@ -3,7 +3,7 @@ import {
   listVendors, assignVendorToCanteen,
   createAnnouncement, toggleAnnouncement, listAnnouncements,
   getSettlements, markSettlementPaid,
-  listUsers, updateUserRole,
+  listUsers, updateUserRole, banUser, unbanUser,
 } from '../controllers/admin.controller';
 import { authenticate, requireAdmin } from '../middleware/auth';
 
@@ -22,5 +22,7 @@ router.post('/settlements/:id/mark-paid', markSettlementPaid);
 
 router.get('/users', listUsers);
 router.patch('/users/:id/role', updateUserRole);
+router.post('/users/ban', banUser);
+router.post('/users/unban', unbanUser);
 
 export default router;
