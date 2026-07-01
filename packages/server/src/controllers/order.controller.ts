@@ -161,7 +161,7 @@ export async function verifyPayment(req: AuthRequest, res: Response) {
 
     const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
     ioServer?.to(`order:${id}`).emit('order:status_update', { orderId: id, status: OrderStatus.CANCELLED, reason: 'Payment not received' });
-    await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CANCELLED);
+    if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CANCELLED);
     return res.json({ success: true, confirmed: false });
   }
 
@@ -174,7 +174,7 @@ export async function verifyPayment(req: AuthRequest, res: Response) {
   const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
   ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order: updatedOrder });
   ioServer?.to(`order:${id}`).emit('order:status_update', { orderId: id, status: OrderStatus.CONFIRMED, paymentStatus: 'VERIFIED' });
-  await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CONFIRMED);
+  if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CONFIRMED);
 
   return res.json({ success: true, confirmed: true, order: updatedOrder });
 }
@@ -316,7 +316,7 @@ export async function updateOrderStatus(req: AuthRequest, res: Response) {
   });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status, estimatedReadyAt: updated.estimatedReadyAt });
-  await sendOrderNotification(order.userId, id, order.orderNumber, status as OrderStatus);
+  if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, status as OrderStatus);
 
   return res.json({ order: updated });
 }
@@ -374,7 +374,7 @@ export async function respondToOrder(req: AuthRequest, res: Response) {
   if (action === 'ACCEPT') {
     const updated = await prisma.order.update({ where: { id }, data: { status: OrderStatus.ACCEPTED } });
     emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.ACCEPTED });
-    await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.ACCEPTED);
+    if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.ACCEPTED);
     return res.json({ order: updated });
   }
 
