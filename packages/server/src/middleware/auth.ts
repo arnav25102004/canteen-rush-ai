@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import { verifyFirebaseToken } from '../config/firebase';
 import { prisma } from '../config/database';
 import { UserRole } from '@prisma/client';
+import { logger } from '../utils/logger';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -25,6 +26,11 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
   const decoded = await verifyFirebaseToken(token);
 
   if (!decoded) {
+    logger.warn('Failed auth attempt — invalid token', {
+      ip: req.ip,
+      path: req.path,
+      userAgent: req.headers['user-agent'],
+    });
     return res.status(401).json({ error: 'Invalid or expired token' });
   }
 
@@ -35,6 +41,11 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
 
   if (!user) {
     return res.status(401).json({ error: 'User not registered. Please register first.' });
+  }
+
+  if (user.isBanned) {
+    logger.warn('Banned user attempted access', { userId: user.id, ip: req.ip, path: req.path });
+    return res.status(403).json({ error: 'Account suspended.' });
   }
 
   req.user = {
@@ -76,7 +87,7 @@ export async function optionalAuthenticate(req: AuthRequest, res: Response, next
     where: { firebaseUid: decoded.uid },
     include: { vendorCanteen: { select: { id: true } } },
   });
-  if (user) {
+  if (user && !user.isBanned) {
     req.user = {
       id: user.id,
       firebaseUid: user.firebaseUid,

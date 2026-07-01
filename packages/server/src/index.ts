@@ -4,6 +4,7 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
+import rateLimit from 'express-rate-limit';
 import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -13,9 +14,11 @@ dotenv.config({ path: path.resolve(__dirname, '../.env') });
 import { prisma } from './config/database';
 import { redis } from './config/redis';
 import { setupSocketIO } from './socket/orderSocket';
+import { logger } from './utils/logger';
 
 // Routes
 import authRoutes from './routes/auth.routes';
+import userRoutes from './routes/user.routes';
 import canteenRoutes from './routes/canteen.routes';
 import menuRoutes from './routes/menu.routes';
 import slotRoutes from './routes/slot.routes';
@@ -36,6 +39,7 @@ import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
 const app = express();
 const server = http.createServer(app);
 
+// ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = [
   'http://localhost:3000',
   'http://localhost:8081',
@@ -43,21 +47,84 @@ const allowedOrigins = [
   ...(process.env.WEB_URL ? [process.env.WEB_URL] : []),
 ].filter(Boolean);
 
-// Socket.IO setup
+// Socket.IO — permissive because mobile clients have no origin header
 const io = new SocketIOServer(server, {
   cors: { origin: (origin, cb) => cb(null, true), credentials: true },
 });
 
-// Middleware
-app.use(helmet({ crossOriginResourcePolicy: { policy: 'cross-origin' } }));
+// ── Security headers ──────────────────────────────────────────────────────────
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      scriptSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", 'data:', 'res.cloudinary.com'],
+      connectSrc: ["'self'", 'https://api.razorpay.com'],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: 'cross-origin' },
+}));
+
 app.use(cors({
-  origin: (origin, callback) => {
-    // Allow no-origin requests (mobile apps, health checks) and listed origins
-    if (!origin || allowedOrigins.includes(origin)) return callback(null, true);
-    callback(null, true); // permissive for now — tighten in production
+  origin: (_origin, callback) => {
+    // Allow mobile apps (no origin) and explicitly whitelisted origins
+    if (!_origin || allowedOrigins.includes(_origin)) return callback(null, true);
+    callback(new Error('Not allowed by CORS'));
   },
   credentials: true,
 }));
+
+// ── Rate limiting ─────────────────────────────────────────────────────────────
+const globalLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 100,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: { error: 'Too many requests. Please slow down.' },
+  handler: (req, res) => {
+    logger.warn('Global rate limit hit', { ip: req.ip, path: req.path });
+    res.status(429).json({ error: 'Too many requests. Please slow down.' });
+  },
+});
+
+const authLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 10,
+  message: { error: 'Too many login attempts. Try again later.' },
+  handler: (req, res) => {
+    logger.warn('Auth rate limit hit', { ip: req.ip, path: req.path });
+    res.status(429).json({ error: 'Too many login attempts. Try again later.' });
+  },
+});
+
+const paymentLimiter = rateLimit({
+  windowMs: 60 * 1000,
+  max: 5,
+  message: { error: 'Too many payment requests.' },
+  handler: (req, res) => {
+    logger.warn('Payment rate limit hit', { ip: req.ip, path: req.path });
+    res.status(429).json({ error: 'Too many payment requests.' });
+  },
+});
+
+const forgotPasswordLimiter = rateLimit({
+  windowMs: 60 * 60 * 1000, // 1 hour
+  max: 3,
+  message: { error: 'Too many password reset attempts. Try again in an hour.' },
+  handler: (req, res) => {
+    logger.warn('Forgot-password rate limit hit', { ip: req.ip });
+    res.status(429).json({ error: 'Too many password reset attempts. Try again in an hour.' });
+  },
+});
+
+app.use(globalLimiter);
+app.use('/api/auth', authLimiter);
+app.use('/api/auth/forgot-password', forgotPasswordLimiter);
+app.use('/api/orders', paymentLimiter);
+
+// ── Body parsing ──────────────────────────────────────────────────────────────
 app.use(compression());
 app.use(morgan('dev'));
 app.use(express.json({
@@ -75,12 +142,13 @@ app.use((req: any, _res, next) => {
   next();
 });
 
-// Health check (both paths for compatibility)
+// ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
-// API Routes
+// ── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
+app.use('/api/user', userRoutes);
 app.use('/api/canteens', canteenRoutes);
 app.use('/api/menu', menuRoutes);
 app.use('/api/vendor', menuRoutes);
@@ -108,17 +176,17 @@ const PORT = parseInt(process.env.PORT || '3001', 10);
 async function bootstrap() {
   try {
     await prisma.$connect();
-    console.log('PostgreSQL connected');
+    logger.info('PostgreSQL connected');
   } catch (err) {
-    console.error('Failed to connect to PostgreSQL:', err);
+    logger.error('Failed to connect to PostgreSQL', { err });
     process.exit(1);
   }
 
   try {
     await redis.ping();
-    console.log('Redis connected');
+    logger.info('Redis connected');
   } catch (err) {
-    console.warn('Redis unavailable — payment status polling disabled, continuing without it');
+    logger.warn('Redis unavailable — payment status polling disabled, continuing without it');
   }
 
   // Start background jobs
@@ -126,8 +194,7 @@ async function bootstrap() {
   startAutoCancelJob();
 
   server.listen(PORT, () => {
-    console.log(`Server running on http://localhost:${PORT}`);
-    console.log(`Socket.IO ready`);
+    logger.info(`Server running on http://localhost:${PORT}`);
   });
 }
 
