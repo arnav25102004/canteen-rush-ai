@@ -4,6 +4,7 @@ import { redis, KEYS, incrOrderSeq } from '../config/redis';
 import { generateQRToken } from './qr.service';
 import { sendOrderNotification } from './notification.service';
 import { validatePointsRedemption, redeemPoints } from './loyalty.service';
+import { FEATURES } from '../config/features';
 import { OrderStatus } from '@prisma/client';
 
 interface PlaceOrderInput {
@@ -123,9 +124,15 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
 
   // Determine payment method and initial status
   const isFreeOrder = totalAmount === 0;
-  const paymentMethod = isFreeOrder ? 'WALLET' : (useRazorpay ? 'RAZORPAY' : 'UPI_DIRECT');
-  const paymentStatus = isFreeOrder || !useRazorpay ? 'PAID' : 'AWAITING_PAYMENT';
-  const orderStatus = isFreeOrder || !useRazorpay ? OrderStatus.CONFIRMED : OrderStatus.PENDING;
+  // When Razorpay is disabled (pay-at-counter mode), treat every order as cash-on-pickup
+  const forcePayAtCounter = !FEATURES.RAZORPAY_ENABLED;
+  const paymentMethod = isFreeOrder
+    ? 'WALLET'
+    : forcePayAtCounter
+      ? 'CASH'
+      : (useRazorpay ? 'RAZORPAY' : 'UPI_DIRECT');
+  const paymentStatus = (isFreeOrder || !useRazorpay || forcePayAtCounter) ? 'PAID' : 'AWAITING_PAYMENT';
+  const orderStatus = (isFreeOrder || !useRazorpay || forcePayAtCounter) ? OrderStatus.CONFIRMED : OrderStatus.PENDING;
 
   const orderNumber = await generateOrderNumber(canteenId);
 
@@ -221,16 +228,16 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   const ioServer = io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
 
   // For Razorpay orders, the webhook fires order:new after payment capture
-  // For immediate (free / UPI) orders, emit now and notify student
-  if (!useRazorpay || isFreeOrder) {
+  // For immediate orders (free / UPI / cash pay-at-counter), emit now and notify student
+  if (!useRazorpay || isFreeOrder || forcePayAtCounter) {
     ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order });
     await sendOrderNotification(userId, order.id, orderNumber, OrderStatus.CONFIRMED);
   }
 
-  // Create Razorpay order for chargeable non-free orders
+  // Create Razorpay order for chargeable non-free orders (skipped when RAZORPAY_ENABLED=false)
   let razorpayDetails: PlaceOrderResult['razorpay'] = null;
 
-  if (useRazorpay && !isFreeOrder) {
+  if (useRazorpay && !isFreeOrder && FEATURES.RAZORPAY_ENABLED) {
     const rzp = new Razorpay({
       key_id: process.env.RAZORPAY_KEY_ID!,
       key_secret: process.env.RAZORPAY_KEY_SECRET!,
@@ -313,11 +320,12 @@ export async function cancelOrder(
     });
 
     // Refund wallet for orders where payment was verified/paid
+    // userId may be null if user deleted their account — skip refund in that case
     const shouldRefund =
-      order.paymentStatus === 'VERIFIED' ||
-      order.paymentStatus === 'PAID';
+      !!order.userId &&
+      (order.paymentStatus === 'VERIFIED' || order.paymentStatus === 'PAID');
 
-    if (shouldRefund) {
+    if (shouldRefund && order.userId) {
       const wallet = await tx.wallet.upsert({
         where: { userId: order.userId },
         update: { balance: { increment: Number(order.totalAmount) } },
@@ -345,5 +353,5 @@ export async function cancelOrder(
   ioServer?.to(`order:${orderId}`).emit('order:status_update', { orderId, status: OrderStatus.CANCELLED });
   ioServer?.to(`canteen:${order.canteenId}`).emit('order:status_update', { orderId, status: OrderStatus.CANCELLED });
 
-  await sendOrderNotification(order.userId, orderId, order.orderNumber, OrderStatus.CANCELLED);
+  if (order.userId) await sendOrderNotification(order.userId, orderId, order.orderNumber, OrderStatus.CANCELLED);
 }
