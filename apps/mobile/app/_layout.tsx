@@ -2,7 +2,10 @@ import { useEffect, useState } from 'react';
 import { View, ActivityIndicator, Text } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
 import axios from 'axios';
+import { onAuthStateChanged } from 'firebase/auth';
+import { auth } from '../firebaseConfig';
 import { useAuthStore } from '../store/authStore';
+import { CONFIG } from '../config';
 
 export default function RootLayout() {
   const { user, institution, isLoaded, loadFromStorage } = useAuthStore();
@@ -14,14 +17,43 @@ export default function RootLayout() {
   useEffect(() => {
     const checkServer = async () => {
       try {
-        await axios.get('https://canteen-rush-ai.onrender.com/api/health', { timeout: 60000 });
+        await axios.get(`${CONFIG.API_URL.replace('/api', '')}/api/health`, { timeout: 60000 });
         setServerReady(true);
       } catch {
         setServerError(true);
       }
     };
     checkServer();
+
+    // Restore cached session from AsyncStorage first (instant)
     loadFromStorage();
+
+    // Firebase onAuthStateChanged fires once on app start with the persisted user.
+    // If Firebase has a session but AsyncStorage doesn't (e.g. fresh install on same account),
+    // auto-fetch the profile from the backend so the user stays logged in.
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (!firebaseUser) return; // Not logged in — let loadFromStorage handle redirect
+      const stored = useAuthStore.getState();
+      if (stored.user) return; // Already restored from AsyncStorage — nothing to do
+
+      try {
+        const token = await firebaseUser.getIdToken();
+        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        const { data } = await axios.get(`${CONFIG.API_URL}/auth/me`);
+        if (data.user) {
+          const { AsyncStorage } = await import('@react-native-async-storage/async-storage');
+          await AsyncStorage.multiSet([
+            ['user', JSON.stringify(data.user)],
+            ['auth_token', token],
+          ]);
+          useAuthStore.setState({ user: data.user, token, isLoaded: true });
+        }
+      } catch {
+        // Backend unreachable or user not registered — proceed normally, loadFromStorage will handle
+      }
+    });
+
+    return unsubscribe;
   }, []);
 
   useEffect(() => {
