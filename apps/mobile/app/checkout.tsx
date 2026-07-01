@@ -188,11 +188,11 @@ export default function CheckoutScreen() {
       {/* Payment info */}
       {amountDue > 0 ? (
         <View style={styles.payCard}>
-          <Text style={styles.payIcon}>💳</Text>
+          <Text style={styles.payIcon}>💵</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.payTitle}>Pay via Razorpay</Text>
+            <Text style={styles.payTitle}>Pay at Counter</Text>
             <Text style={styles.paySubtitle}>
-              UPI, cards, netbanking — ₹{amountDue.toFixed(0)} charged securely
+              Show your pickup code and pay ₹{amountDue.toFixed(0)} in cash when you collect.
             </Text>
           </View>
         </View>
@@ -215,7 +215,7 @@ export default function CheckoutScreen() {
         {placing
           ? <ActivityIndicator color="#fff" />
           : <Text style={styles.placeBtnText}>
-              {amountDue > 0 ? `Pay ₹${amountDue.toFixed(0)}` : 'Place Order — Free'}
+              {amountDue > 0 ? `Place Order — Pay ₹${amountDue.toFixed(0)} at Counter` : 'Place Order — Free'}
             </Text>}
       </TouchableOpacity>
     </ScrollView>

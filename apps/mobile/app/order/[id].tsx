@@ -3,6 +3,7 @@ import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator
 import { useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
 import api from '../../services/api';
+import { getSocket } from '../../services/socket';
 
 const STEPS = ['CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY', 'PICKED_UP'];
 const STEP_LABELS: Record<string, string> = {
@@ -20,22 +21,51 @@ export default function OrderTrackingScreen() {
   const [loading, setLoading] = useState(true);
 
   const load = useCallback(async () => {
-    const { data } = await api.get(`/orders/${id}`);
-    setOrder(data.order);
-    if (data.order.status === 'READY') {
-      const qrRes = await api.get(`/orders/${id}/qr`).catch(() => ({ data: null }));
-      if (qrRes.data) setQrCode(qrRes.data.qrCode);
-    }
+    try {
+      const { data } = await api.get(`/orders/${id}`);
+      setOrder(data.order);
+      if (data.order.status === 'READY') {
+        const qrRes = await api.get(`/orders/${id}/qr`).catch(() => ({ data: null }));
+        if (qrRes.data) setQrCode(qrRes.data.qrCode);
+      }
+    } catch { /* silent — polling will retry */ }
   }, [id]);
 
+  // Initial load
   useEffect(() => { load().finally(() => setLoading(false)); }, [load]);
 
+  // Socket.IO — instant status updates from the backend
+  useEffect(() => {
+    if (!id) return;
+    const socket = getSocket();
+
+    socket.emit('join:order', { orderId: id });
+
+    socket.on('order:status_update', (data: { orderId: string; status: string; paymentStatus?: string; pickupCode?: string }) => {
+      if (data.orderId !== id) return;
+      setOrder((prev: any) => prev ? { ...prev, ...data } : prev);
+      // If just turned READY, fetch QR code
+      if (data.status === 'READY') {
+        api.get(`/orders/${id}/qr`).then(r => setQrCode(r.data.qrCode)).catch(() => null);
+      }
+      // Re-fetch full order for any status change to get latest data
+      load();
+    });
+
+    return () => {
+      socket.emit('leave:order', { orderId: id });
+      socket.off('order:status_update');
+    };
+  }, [id, load]);
+
+  // Polling fallback — only active while payment is still processing (webhook can take ~10s)
   useEffect(() => {
     if (!order) return;
     if (['PICKED_UP', 'CANCELLED'].includes(order.status)) return;
-    // Poll every 5 s until terminal state
-    const interval = setInterval(load, 5000);
-    return () => clearInterval(interval);
+    // Poll faster (3s) while PENDING, slow down to 10s after payment confirms
+    const interval = order.status === 'PENDING' ? 3000 : 10000;
+    const timer = setInterval(load, interval);
+    return () => clearInterval(timer);
   }, [order?.status, load]);
 
   if (loading) return <View style={styles.center}><ActivityIndicator size="large" color="#e94560" /></View>;
@@ -54,6 +84,16 @@ export default function OrderTrackingScreen() {
         )}
         {order.slot && <Text style={styles.slotText}>📍 Pickup slot: {order.slot.startTime}–{order.slot.endTime}</Text>}
       </View>
+
+      {/* Cash payment banner — shown for pay-at-counter orders */}
+      {order.paymentMethod === 'CASH' && !['PICKED_UP', 'CANCELLED'].includes(order.status) && (
+        <View style={styles.cashBanner}>
+          <Text style={styles.cashBannerTitle}>💵 Pay at Counter</Text>
+          <Text style={styles.cashBannerText}>
+            Show your pickup code to the vendor and pay ₹{Number(order.totalAmount).toFixed(0)} in cash when you collect.
+          </Text>
+        </View>
+      )}
 
       {/* Payment processing banner — shown while waiting for Razorpay webhook */}
       {isPendingPayment && (
@@ -167,4 +207,7 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: '#f0f0f0', marginVertical: 8 },
   refreshBtn: { backgroundColor: '#f1f5f9', borderRadius: 12, padding: 14, alignItems: 'center' },
   refreshBtnText: { color: '#555', fontWeight: '600' },
+  cashBanner: { backgroundColor: '#fffbeb', borderRadius: 14, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#fde68a' },
+  cashBannerTitle: { fontSize: 14, fontWeight: '700', color: '#92400e', marginBottom: 4 },
+  cashBannerText: { fontSize: 13, color: '#78350f', lineHeight: 18 },
 });
