@@ -26,7 +26,13 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
     .update(req.rawBody)
     .digest('hex');
 
-  if (signature !== expectedSignature) {
+  // timingSafeEqual prevents timing attacks on the HMAC comparison
+  const sigBuf = Buffer.from(signature, 'hex');
+  const expectedBuf = Buffer.from(expectedSignature, 'hex');
+  const signatureValid = sigBuf.length === expectedBuf.length &&
+    crypto.timingSafeEqual(sigBuf, expectedBuf);
+
+  if (!signatureValid) {
     console.warn('[Webhook] Invalid Razorpay signature');
     return res.status(400).json({ error: 'Invalid webhook signature' });
   }
@@ -85,7 +91,7 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
       pickupCode,
     });
 
-    await sendOrderNotification(order.userId, order.id, order.orderNumber, OrderStatus.CONFIRMED);
+    if (order.userId) await sendOrderNotification(order.userId, order.id, order.orderNumber, OrderStatus.CONFIRMED);
     console.log(`[Webhook] Order ${order.orderNumber} confirmed, pickupCode: ${pickupCode}`);
   }
 

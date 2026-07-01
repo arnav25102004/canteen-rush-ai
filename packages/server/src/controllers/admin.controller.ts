@@ -170,3 +170,28 @@ export async function updateUserRole(req: AuthRequest, res: Response) {
   return res.json({ user });
 }
 
+export async function banUser(req: AuthRequest, res: Response) {
+  const { userId, reason } = req.body as { userId: string; reason?: string };
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+  if (userId === req.user!.id) return res.status(400).json({ error: 'Cannot ban yourself' });
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: { isBanned: true, banReason: reason || null, bannedAt: new Date() },
+    select: { id: true, name: true, email: true, isBanned: true, banReason: true },
+  });
+  return res.json({ success: true, user });
+}
+
+export async function unbanUser(req: AuthRequest, res: Response) {
+  const { userId } = req.body as { userId: string };
+  if (!userId) return res.status(400).json({ error: 'userId required' });
+
+  const user = await prisma.user.update({
+    where: { id: userId },
+    data: { isBanned: false, banReason: null, bannedAt: null },
+    select: { id: true, name: true, email: true, isBanned: true },
+  });
+  return res.json({ success: true, user });
+}
+
