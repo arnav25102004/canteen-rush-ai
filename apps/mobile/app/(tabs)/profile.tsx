@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, FlatList, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
@@ -19,6 +19,29 @@ export default function ProfileScreen() {
   async function removeFavorite(menuItemId: string) {
     setFavorites(prev => prev.filter(f => f.id !== menuItemId));
     await api.delete(`/menu/favorites/${menuItemId}`).catch(() => null);
+  }
+
+  function handleDeleteAccount() {
+    Alert.alert(
+      'Delete Account',
+      'This will permanently delete your account and all personal data. Your order history will be anonymised. This cannot be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete My Account',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await api.delete('/user/account');
+              await logout();
+              router.replace('/(auth)/login');
+            } catch (err) {
+              Alert.alert('Error', 'Failed to delete account. Please try again.');
+            }
+          },
+        },
+      ]
+    );
   }
 
   const isFaculty = user?.role === 'FACULTY';
@@ -79,6 +102,10 @@ export default function ProfileScreen() {
       <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
         <Text style={styles.logoutText}>Sign Out</Text>
       </TouchableOpacity>
+
+      <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteAccount}>
+        <Text style={styles.deleteBtnText}>Delete Account & Data</Text>
+      </TouchableOpacity>
     </ScrollView>
   );
 }
@@ -101,6 +128,8 @@ const styles = StyleSheet.create({
   favName: { fontSize: 14, fontWeight: '600', color: '#1a1a2e' },
   favCanteen: { fontSize: 12, color: '#888', marginTop: 2 },
   favOrder: { fontSize: 13, color: '#e94560', fontWeight: '600' },
-  logoutBtn: { margin: 16, backgroundColor: '#fff', borderRadius: 12, padding: 16, alignItems: 'center', elevation: 1, marginTop: 20, marginBottom: 40 },
+  logoutBtn: { margin: 16, backgroundColor: '#fff', borderRadius: 12, padding: 16, alignItems: 'center', elevation: 1, marginTop: 20, marginBottom: 8 },
   logoutText: { color: '#ef4444', fontWeight: '600' },
+  deleteBtn: { marginHorizontal: 16, marginBottom: 40, borderRadius: 12, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: '#fca5a5' },
+  deleteBtnText: { color: '#dc2626', fontSize: 13 },
 });
