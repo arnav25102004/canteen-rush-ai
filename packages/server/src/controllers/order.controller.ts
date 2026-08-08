@@ -142,21 +142,28 @@ export async function verifyPayment(req: AuthRequest, res: Response) {
   }
 
   if (!confirmed) {
-    // Vendor says payment was NOT received — cancel and add strike
+    // Vendor says payment was NOT received — cancel and add strike.
+    // userId is null on orders anonymised by account deletion; there is nobody to strike.
+    const strikeUserId = order.userId;
+
     await prisma.$transaction(async (tx) => {
       await tx.order.update({
         where: { id },
         data: { paymentStatus: 'EXPIRED', status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: 'Payment not received — vendor rejected' },
       });
-      await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
+      if (strikeUserId) {
+        await tx.user.update({ where: { id: strikeUserId }, data: { orderStrikes: { increment: 1 } } });
+      }
     });
 
-    const updatedUser = await prisma.user.findUnique({ where: { id: order.userId }, select: { orderStrikes: true } });
-    if (updatedUser && updatedUser.orderStrikes >= 3) {
-      await prisma.user.update({
-        where: { id: order.userId },
-        data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
-      });
+    if (strikeUserId) {
+      const updatedUser = await prisma.user.findUnique({ where: { id: strikeUserId }, select: { orderStrikes: true } });
+      if (updatedUser && updatedUser.orderStrikes >= 3) {
+        await prisma.user.update({
+          where: { id: strikeUserId },
+          data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
+        });
+      }
     }
 
     const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;

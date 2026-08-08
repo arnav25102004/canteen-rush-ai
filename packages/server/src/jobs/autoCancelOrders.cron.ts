@@ -42,8 +42,9 @@ async function cancelUnpaidOrders() {
           },
         });
 
-        // Refund any wallet deduction that was applied at order placement
-        if (order.walletTransaction && Number(order.walletTransaction.amount) > 0) {
+        // Refund any wallet deduction that was applied at order placement.
+        // Anonymised orders (userId null) have no wallet left to refund into.
+        if (order.userId && order.walletTransaction && Number(order.walletTransaction.amount) > 0) {
           const wallet = await tx.wallet.update({
             where: { userId: order.userId },
             data: { balance: { increment: Number(order.walletTransaction.amount) } },
@@ -94,18 +95,22 @@ async function cancelUnverifiedOrders() {
           },
         });
 
-        // Add a strike to the student
-        await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
+        // Add a strike to the student. Anonymised orders have no student to strike.
+        if (order.userId) {
+          await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
+        }
       });
 
       // Check if 3+ strikes → ban for 30 days
-      const user = await prisma.user.findUnique({ where: { id: order.userId }, select: { orderStrikes: true } });
-      if (user && user.orderStrikes >= 3) {
-        await prisma.user.update({
-          where: { id: order.userId },
-          data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
-        });
-        console.log(`[Cron] Student ${order.userId} banned for 30 days after 3 strikes`);
+      if (order.userId) {
+        const user = await prisma.user.findUnique({ where: { id: order.userId }, select: { orderStrikes: true } });
+        if (user && user.orderStrikes >= 3) {
+          await prisma.user.update({
+            where: { id: order.userId },
+            data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
+          });
+          console.log(`[Cron] Student ${order.userId} banned for 30 days after 3 strikes`);
+        }
       }
 
       if (order.slotId) {
