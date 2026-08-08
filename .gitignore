@@ -249,6 +249,12 @@ apps/mobile/package-lock.json
 # OS files
 .DS_Store
 Thumbs.db
+*.lnk
+
+# JVM crash dumps (Gradle/Android builds drop these at repo root)
+hs_err_pid*.log
+hs_err_pid*.mdmp
+replay_pid*.log
 
 # Build artifacts
 *.tsbuildinfo
