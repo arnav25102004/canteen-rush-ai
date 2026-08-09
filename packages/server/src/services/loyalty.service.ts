@@ -80,8 +80,9 @@ export async function awardPointsForOrder(orderId: string): Promise<void> {
 
   if (!order || order.status !== 'PICKED_UP') return;
   if (order.pointsRedeemed > 0) return; // don't award on redemption orders
-  // Orders anonymised by account deletion have no user to award points to
-  if (!order.userId || !order.user) return;
+  // Accounts are anonymised (not deleted) so userId/user survive — but a
+  // deleted user's loyaltyAccount was removed on deletion; don't resurrect it.
+  if (!order.userId || !order.user || order.user.isDeleted) return;
   const { userId, user } = order;
 
   const orderHour = order.createdAt.getHours();

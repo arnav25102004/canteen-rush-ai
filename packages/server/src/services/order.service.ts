@@ -319,10 +319,17 @@ export async function cancelOrder(
       },
     });
 
-    // Refund wallet for orders where payment was verified/paid
-    // userId may be null if user deleted their account — skip refund in that case
+    // Refund wallet for orders where payment was verified/paid.
+    // Accounts are anonymised (not deleted) on account deletion, so userId
+    // survives — but a deleted user has no wallet to refund into, and
+    // wallet.upsert would otherwise resurrect one for a scrubbed account.
+    const orderUser = order.userId
+      ? await tx.user.findUnique({ where: { id: order.userId }, select: { isDeleted: true } })
+      : null;
+
     const shouldRefund =
       !!order.userId &&
+      !orderUser?.isDeleted &&
       (order.paymentStatus === 'VERIFIED' || order.paymentStatus === 'PAID');
 
     if (shouldRefund && order.userId) {
