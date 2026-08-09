@@ -237,6 +237,7 @@ apps/web/.env.production
 ENV_VARS_PRODUCTION.md
 firebase-service-account.json
 **/firebase-service-account.json
+apps/mobile/google-services.json
 
 # Claude memory
 .claude/
