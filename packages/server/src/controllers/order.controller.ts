@@ -143,7 +143,8 @@ export async function verifyPayment(req: AuthRequest, res: Response) {
 
   if (!confirmed) {
     // Vendor says payment was NOT received — cancel and add strike.
-    // userId is null on orders anonymised by account deletion; there is nobody to strike.
+    // Deleted accounts are anonymised, not removed, so userId still points at a
+    // real row; the strike is harmless there since isDeleted already blocks login.
     const strikeUserId = order.userId;
 
     await prisma.$transaction(async (tx) => {
@@ -311,6 +312,7 @@ export async function updateOrderStatus(req: AuthRequest, res: Response) {
     select: { status: true, canteenId: true, userId: true, orderNumber: true, estimatedReadyAt: true },
   });
   if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (order.canteenId !== req.user!.canteenId) return res.status(403).json({ error: 'Forbidden' });
 
   const allowed = VALID_TRANSITIONS[order.status] ?? [];
   if (!allowed.includes(status)) {
