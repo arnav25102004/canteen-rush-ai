@@ -29,7 +29,7 @@ export default function SelectInstitutionScreen() {
   return (
     <SafeAreaView style={styles.container}>
       <View style={styles.header}>
-        <Text style={styles.logo}>CanteenRush</Text>
+        <Text style={styles.logo}>Campus Khana</Text>
         <Text style={styles.subtitle}>Select your institution</Text>
       </View>
 

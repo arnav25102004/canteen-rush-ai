@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { View, ActivityIndicator, Text } from 'react-native';
 import { Stack, useRouter, useSegments } from 'expo-router';
+import * as ScreenCapture from 'expo-screen-capture';
 import axios from 'axios';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
@@ -13,6 +14,13 @@ export default function RootLayout() {
   const segments = useSegments();
   const [serverReady, setServerReady] = useState(false);
   const [serverError, setServerError] = useState(false);
+
+  useEffect(() => {
+    // Order screens show pickup QR codes and payment references — block
+    // screenshots/recording app-wide so those can't be leaked via gallery
+    // or a screen-recording app running alongside Campus Khana.
+    ScreenCapture.preventScreenCaptureAsync().catch(() => {});
+  }, []);
 
   useEffect(() => {
     const checkServer = async () => {
@@ -83,7 +91,7 @@ export default function RootLayout() {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0B1120' }}>
         <ActivityIndicator size="large" color="#F97316" />
-        <Text style={{ color: '#94A3B8', marginTop: 16, fontSize: 14 }}>Starting CanteenRush...</Text>
+        <Text style={{ color: '#94A3B8', marginTop: 16, fontSize: 14 }}>Starting Campus Khana...</Text>
         <Text style={{ color: '#475569', marginTop: 8, fontSize: 12 }}>First load may take up to 60 seconds</Text>
       </View>
     );
