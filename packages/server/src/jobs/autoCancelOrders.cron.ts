@@ -26,7 +26,11 @@ async function cancelUnpaidOrders() {
   const cutoff = new Date(Date.now() - 10 * 60 * 1000);
   const unpaidOrders = await prisma.order.findMany({
     where: { paymentStatus: 'AWAITING_PAYMENT', createdAt: { lt: cutoff } },
-    select: { id: true, userId: true, orderNumber: true, slotId: true, walletTransaction: { select: { id: true, amount: true } } },
+    select: {
+      id: true, userId: true, orderNumber: true, slotId: true,
+      walletTransaction: { select: { id: true, amount: true } },
+      user: { select: { isDeleted: true } },
+    },
   });
 
   for (const order of unpaidOrders) {
@@ -43,8 +47,10 @@ async function cancelUnpaidOrders() {
         });
 
         // Refund any wallet deduction that was applied at order placement.
-        // Anonymised orders (userId null) have no wallet left to refund into.
-        if (order.userId && order.walletTransaction && Number(order.walletTransaction.amount) > 0) {
+        // Deleted accounts are anonymised (not removed) but their wallet row
+        // was deleted at that time — tx.wallet.update would throw on a
+        // missing row, so skip refunding into a wallet that no longer exists.
+        if (order.userId && !order.user?.isDeleted && order.walletTransaction && Number(order.walletTransaction.amount) > 0) {
           const wallet = await tx.wallet.update({
             where: { userId: order.userId },
             data: { balance: { increment: Number(order.walletTransaction.amount) } },
@@ -95,7 +101,8 @@ async function cancelUnverifiedOrders() {
           },
         });
 
-        // Add a strike to the student. Anonymised orders have no student to strike.
+        // Add a strike to the student. Harmless no-op if the account was since
+        // anonymised — isDeleted already blocks that account from logging in.
         if (order.userId) {
           await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
         }
