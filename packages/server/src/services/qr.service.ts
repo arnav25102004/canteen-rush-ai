@@ -1,8 +1,21 @@
 import jwt from 'jsonwebtoken';
+import type { SignOptions } from 'jsonwebtoken';
 import QRCode from 'qrcode';
 
-const QR_SECRET = process.env.JWT_SECRET || 'christ-canteen-qr-secret';
-import type { SignOptions } from 'jsonwebtoken';
+// QR tokens are the credential a vendor scans to hand over food. A fallback
+// secret would be committed to the repo and let anyone forge a pickup token,
+// so refuse to boot without a real one rather than degrade silently.
+function requireQRSecret(): string {
+  const secret = process.env.JWT_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error(
+      'JWT_SECRET must be set to at least 32 characters — it signs order pickup QR tokens.'
+    );
+  }
+  return secret;
+}
+
+const QR_SECRET = requireQRSecret();
 const QR_EXPIRY: SignOptions['expiresIn'] = '12h';
 
 export interface QRPayload {
