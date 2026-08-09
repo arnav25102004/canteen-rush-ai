@@ -48,6 +48,10 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     return res.status(403).json({ error: 'Account suspended.' });
   }
 
+  if (user.isDeleted) {
+    return res.status(401).json({ error: 'Account no longer exists.' });
+  }
+
   req.user = {
     id: user.id,
     firebaseUid: user.firebaseUid,
@@ -87,7 +91,7 @@ export async function optionalAuthenticate(req: AuthRequest, res: Response, next
     where: { firebaseUid: decoded.uid },
     include: { vendorCanteen: { select: { id: true } } },
   });
-  if (user && !user.isBanned) {
+  if (user && !user.isBanned && !user.isDeleted) {
     req.user = {
       id: user.id,
       firebaseUid: user.firebaseUid,
