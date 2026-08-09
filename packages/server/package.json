@@ -1,5 +1,5 @@
 {
-  "name": "@christ-canteen/server",
+  "name": "@campus-khana/server",
   "version": "1.0.0",
   "private": true,
   "scripts": {
@@ -11,6 +11,8 @@
     "seed": "ts-node --project tsconfig.seed.json --require dotenv/config prisma/seed.ts",
     "studio": "prisma studio",
     "generate": "prisma generate",
+    "test": "vitest run",
+    "test:watch": "vitest",
     "android": "expo run:android",
     "ios": "expo run:ios"
   },
@@ -55,10 +57,13 @@
     "@types/node": "^20.11.30",
     "@types/node-cron": "^3.0.11",
     "@types/qrcode": "^1.5.6",
+    "@types/supertest": "^7.2.1",
     "@types/uuid": "^9.0.8",
     "prisma": "^5.10.2",
+    "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
     "ts-node-dev": "^2.0.0",
-    "typescript": "^5.4.3"
+    "typescript": "^5.4.3",
+    "vitest": "^4.1.10"
   }
 }

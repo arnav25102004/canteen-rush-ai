@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
@@ -103,6 +103,13 @@ export default function ProfileScreen() {
         <Text style={styles.logoutText}>Sign Out</Text>
       </TouchableOpacity>
 
+      <TouchableOpacity
+        style={styles.privacyBtn}
+        onPress={() => Linking.openURL('https://arnavnarula.dev/privacy.html')}
+      >
+        <Text style={styles.privacyBtnText}>Privacy Policy</Text>
+      </TouchableOpacity>
+
       <TouchableOpacity style={styles.deleteBtn} onPress={handleDeleteAccount}>
         <Text style={styles.deleteBtnText}>Delete Account & Data</Text>
       </TouchableOpacity>
@@ -130,6 +137,8 @@ const styles = StyleSheet.create({
   favOrder: { fontSize: 13, color: '#e94560', fontWeight: '600' },
   logoutBtn: { margin: 16, backgroundColor: '#fff', borderRadius: 12, padding: 16, alignItems: 'center', elevation: 1, marginTop: 20, marginBottom: 8 },
   logoutText: { color: '#ef4444', fontWeight: '600' },
+  privacyBtn: { marginHorizontal: 16, marginBottom: 8, borderRadius: 12, padding: 14, alignItems: 'center' },
+  privacyBtnText: { color: '#888', fontSize: 13, fontWeight: '500', textDecorationLine: 'underline' },
   deleteBtn: { marginHorizontal: 16, marginBottom: 40, borderRadius: 12, padding: 16, alignItems: 'center', borderWidth: 1, borderColor: '#fca5a5' },
   deleteBtnText: { color: '#dc2626', fontSize: 13 },
 });

@@ -8,7 +8,25 @@ import {
 import { authenticate, requireVendor } from '../middleware/auth';
 import multer from 'multer';
 
-const upload = multer({ dest: '/tmp/uploads/' });
+// Menu item photos only. Without limits/fileFilter any vendor could upload
+// files of any type and unbounded size and fill the container's disk.
+const ALLOWED_IMAGE_MIME = ['image/jpeg', 'image/png', 'image/webp'];
+
+export const upload = multer({
+  dest: '/tmp/uploads/',
+  limits: {
+    fileSize: 5 * 1024 * 1024, // 5 MB
+    files: 1,
+    fields: 10,
+  },
+  fileFilter: (_req, file, cb) => {
+    if (!ALLOWED_IMAGE_MIME.includes(file.mimetype)) {
+      return cb(new Error('Only JPEG, PNG and WebP images are allowed'));
+    }
+    cb(null, true);
+  },
+});
+
 const router = Router();
 
 // Category management (vendor)

@@ -1,6 +1,26 @@
 import { Response } from 'express';
 import { Server as SocketIOServer } from 'socket.io';
 import { z } from 'zod';
+import crypto from 'crypto';
+
+// Crockford-style alphabet: no 0/O, 1/I/L, or U, so codes read aloud at a
+// noisy counter without ambiguity.
+const PICKUP_ALPHABET = '23456789ABCDEFGHJKMNPQRSTVWXYZ';
+const PICKUP_LENGTH = 6;
+
+/**
+ * Pickup codes authorise collecting an order, so they need real entropy.
+ * The previous CR-100..999 scheme had 900 values from Math.random(), which
+ * collided constantly during a lunch rush and was trivially brute-forced.
+ * This gives 30^6 ≈ 7.3e8 values from a CSPRNG.
+ */
+export function generatePickupCode(): string {
+  let code = '';
+  for (let i = 0; i < PICKUP_LENGTH; i++) {
+    code += PICKUP_ALPHABET[crypto.randomInt(PICKUP_ALPHABET.length)];
+  }
+  return `CR-${code}`;
+}
 
 export function parsePagination(page: string = '1', limit: string = '20') {
   const p = Math.max(1, parseInt(page));

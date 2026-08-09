@@ -1,11 +1,11 @@
 {
   "expo": {
-    "name": "CanteenRush",
-    "slug": "canteenrush",
+    "name": "Campus Khana",
+    "slug": "campus-khana",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "scheme": "canteenrush",
+    "scheme": "campuskhana",
     "userInterfaceStyle": "light",
     "splash": {
       "image": "./assets/splash.png",
@@ -14,10 +14,10 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "dev.canteenrush.app"
+      "bundleIdentifier": "dev.campuskhana.app"
     },
     "android": {
-      "package": "dev.canteenrush.app",
+      "package": "dev.campuskhana.app",
       "versionCode": 1,
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -27,7 +27,6 @@
       "permissions": [
         "android.permission.INTERNET",
         "android.permission.VIBRATE",
-        "android.permission.RECEIVE_BOOT_COMPLETED",
         "android.permission.CAMERA"
       ],
       "intentFilters": []
@@ -36,7 +35,7 @@
       "expo-router",
       [
         "expo-camera",
-        { "cameraPermission": "Allow CanteenRush to use your camera to scan QR codes at the canteen counter." }
+        { "cameraPermission": "Allow Campus Khana to use your camera to scan QR codes at the canteen counter." }
       ],
       [
         "expo-build-properties",

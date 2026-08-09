@@ -2,6 +2,7 @@
 import { useEffect, useState, useCallback, useRef } from 'react';
 import Sidebar from '../../../components/shared/Sidebar';
 import api from '../../../lib/api';
+import { auth } from '../../../lib/firebase';
 import { io, Socket } from 'socket.io-client';
 
 interface OrderItem { quantity: number; menuItem: { name: string } }
@@ -73,6 +74,15 @@ export default function VendorDashboard() {
       reconnection: true,
       reconnectionDelay: 1000,
       reconnectionAttempts: 10,
+      // Fetched per (re)connect: the server rejects unauthenticated handshakes
+      // and only lets the assigned vendor join this canteen's room.
+      auth: (cb) => {
+        const user = auth.currentUser;
+        if (!user) return cb({ token: null });
+        user.getIdToken(false)
+          .then((token) => cb({ token }))
+          .catch(() => cb({ token: null }));
+      },
     });
     s.emit('join:canteen', { canteenId });
     s.on('order:new', () => loadData());

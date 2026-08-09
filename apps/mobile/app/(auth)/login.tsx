@@ -68,7 +68,7 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.logo}>CanteenRush</Text>
+      <Text style={styles.logo}>Campus Khana</Text>
       {institution ? (
         <>
           <Text style={styles.subtitle}>{institution.name}</Text>

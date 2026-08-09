@@ -71,7 +71,7 @@ export default function CheckoutScreen() {
         key: razorpay.keyId,
         amount: String(razorpay.amount),   // paise
         order_id: razorpay.orderId,
-        name: 'CanteenRush',
+        name: 'Campus Khana',
         theme: { color: '#e94560' },
       });
 

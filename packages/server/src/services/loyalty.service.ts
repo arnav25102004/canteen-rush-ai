@@ -80,6 +80,10 @@ export async function awardPointsForOrder(orderId: string): Promise<void> {
 
   if (!order || order.status !== 'PICKED_UP') return;
   if (order.pointsRedeemed > 0) return; // don't award on redemption orders
+  // Accounts are anonymised (not deleted) so userId/user survive — but a
+  // deleted user's loyaltyAccount was removed on deletion; don't resurrect it.
+  if (!order.userId || !order.user || order.user.isDeleted) return;
+  const { userId, user } = order;
 
   const orderHour = order.createdAt.getHours();
   const isDoublePoints = orderHour < DOUBLE_POINTS_BEFORE_HOUR;
@@ -87,10 +91,10 @@ export async function awardPointsForOrder(orderId: string): Promise<void> {
   const pointsToAward = isDoublePoints ? basePoints * 2 : basePoints;
   const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
-  let loyaltyAccount = order.user.loyaltyAccount;
+  let loyaltyAccount = user.loyaltyAccount;
   if (!loyaltyAccount) {
     loyaltyAccount = await prisma.loyaltyAccount.create({
-      data: { userId: order.userId, totalPoints: 0, lifetimePoints: 0, totalSaved: 0 },
+      data: { userId, totalPoints: 0, lifetimePoints: 0, totalSaved: 0 },
     });
   }
 

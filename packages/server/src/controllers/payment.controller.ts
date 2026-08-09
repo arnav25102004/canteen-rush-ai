@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import crypto from 'crypto';
 import { prisma } from '../config/database';
 import { sendOrderNotification } from '../services/notification.service';
+import { generatePickupCode } from '../utils/helpers';
 import { OrderStatus } from '@prisma/client';
 
 interface RawRequest extends Request {
@@ -67,7 +68,7 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
       return res.json({ status: 'ok' });
     }
 
-    const pickupCode = `CR-${String(Math.floor(Math.random() * 900) + 100)}`;
+    const pickupCode = generatePickupCode();
 
     await prisma.order.update({
       where: { id: order.id },

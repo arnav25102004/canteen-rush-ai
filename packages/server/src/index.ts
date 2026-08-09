@@ -4,7 +4,6 @@ import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
-import rateLimit from 'express-rate-limit';
 import { Server as SocketIOServer } from 'socket.io';
 import dotenv from 'dotenv';
 import path from 'path';
@@ -31,6 +30,7 @@ import analyticsRoutes from './routes/analytics.routes';
 import institutionRoutes from './routes/institution.routes';
 import loyaltyRoutes from './routes/loyalty.routes';
 import { globalErrorHandler } from './middleware/errorHandler';
+import { globalLimiter, authLimiter, forgotPasswordLimiter } from './middleware/rateLimit';
 
 // Jobs
 import { startSlotGenerationJob } from './jobs/slotGeneration.cron';
@@ -38,6 +38,13 @@ import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
 
 const app = express();
 const server = http.createServer(app);
+
+// Render (and any reverse proxy) forwards the client IP in X-Forwarded-For.
+// Without this, req.ip is the proxy's address for every request, which
+// collapses all per-IP rate limiting into one shared bucket and makes the
+// abuse logs useless. Trust exactly one hop — trusting all hops would let a
+// client spoof X-Forwarded-For and bypass the limiter entirely.
+app.set('trust proxy', 1);
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = [
@@ -47,9 +54,17 @@ const allowedOrigins = [
   ...(process.env.WEB_URL ? [process.env.WEB_URL] : []),
 ].filter(Boolean);
 
-// Socket.IO — permissive because mobile clients have no origin header
+// Socket.IO — mobile clients send no Origin header, so those are allowed through;
+// browser origins must be whitelisted. Every connection is additionally
+// authenticated by the handshake middleware in setupSocketIO.
 const io = new SocketIOServer(server, {
-  cors: { origin: (origin, cb) => cb(null, true), credentials: true },
+  cors: {
+    origin: (origin, cb) =>
+      !origin || allowedOrigins.includes(origin)
+        ? cb(null, true)
+        : cb(new Error('Not allowed by CORS')),
+    credentials: true,
+  },
 });
 
 // ── Security headers ──────────────────────────────────────────────────────────
@@ -77,52 +92,11 @@ app.use(cors({
 }));
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
-const globalLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 100,
-  standardHeaders: true,
-  legacyHeaders: false,
-  message: { error: 'Too many requests. Please slow down.' },
-  handler: (req, res) => {
-    logger.warn('Global rate limit hit', { ip: req.ip, path: req.path });
-    res.status(429).json({ error: 'Too many requests. Please slow down.' });
-  },
-});
-
-const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000,
-  max: 10,
-  message: { error: 'Too many login attempts. Try again later.' },
-  handler: (req, res) => {
-    logger.warn('Auth rate limit hit', { ip: req.ip, path: req.path });
-    res.status(429).json({ error: 'Too many login attempts. Try again later.' });
-  },
-});
-
-const paymentLimiter = rateLimit({
-  windowMs: 60 * 1000,
-  max: 5,
-  message: { error: 'Too many payment requests.' },
-  handler: (req, res) => {
-    logger.warn('Payment rate limit hit', { ip: req.ip, path: req.path });
-    res.status(429).json({ error: 'Too many payment requests.' });
-  },
-});
-
-const forgotPasswordLimiter = rateLimit({
-  windowMs: 60 * 60 * 1000, // 1 hour
-  max: 3,
-  message: { error: 'Too many password reset attempts. Try again in an hour.' },
-  handler: (req, res) => {
-    logger.warn('Forgot-password rate limit hit', { ip: req.ip });
-    res.status(429).json({ error: 'Too many password reset attempts. Try again in an hour.' });
-  },
-});
-
+// Per-user limits on the expensive paths live next to their routes; see
+// middleware/rateLimit.ts for why IP-keyed limits are coarse here.
 app.use(globalLimiter);
 app.use('/api/auth', authLimiter);
 app.use('/api/auth/forgot-password', forgotPasswordLimiter);
-app.use('/api/orders', paymentLimiter);
 
 // ── Body parsing ──────────────────────────────────────────────────────────────
 app.use(compression());

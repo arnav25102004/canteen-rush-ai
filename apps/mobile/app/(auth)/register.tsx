@@ -34,7 +34,7 @@ export default function RegisterScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.logo}>CanteenRush</Text>
+      <Text style={styles.logo}>Campus Khana</Text>
       <Text style={styles.subtitle}>Create your account</Text>
       <Text style={styles.hint}>
         {institution ? `Use your @${institution.emailDomain} email` : 'Use your university email'}

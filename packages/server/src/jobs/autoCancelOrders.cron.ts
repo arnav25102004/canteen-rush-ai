@@ -26,7 +26,11 @@ async function cancelUnpaidOrders() {
   const cutoff = new Date(Date.now() - 10 * 60 * 1000);
   const unpaidOrders = await prisma.order.findMany({
     where: { paymentStatus: 'AWAITING_PAYMENT', createdAt: { lt: cutoff } },
-    select: { id: true, userId: true, orderNumber: true, slotId: true, walletTransaction: { select: { id: true, amount: true } } },
+    select: {
+      id: true, userId: true, orderNumber: true, slotId: true,
+      walletTransaction: { select: { id: true, amount: true } },
+      user: { select: { isDeleted: true } },
+    },
   });
 
   for (const order of unpaidOrders) {
@@ -42,8 +46,11 @@ async function cancelUnpaidOrders() {
           },
         });
 
-        // Refund any wallet deduction that was applied at order placement
-        if (order.walletTransaction && Number(order.walletTransaction.amount) > 0) {
+        // Refund any wallet deduction that was applied at order placement.
+        // Deleted accounts are anonymised (not removed) but their wallet row
+        // was deleted at that time — tx.wallet.update would throw on a
+        // missing row, so skip refunding into a wallet that no longer exists.
+        if (order.userId && !order.user?.isDeleted && order.walletTransaction && Number(order.walletTransaction.amount) > 0) {
           const wallet = await tx.wallet.update({
             where: { userId: order.userId },
             data: { balance: { increment: Number(order.walletTransaction.amount) } },
@@ -94,18 +101,23 @@ async function cancelUnverifiedOrders() {
           },
         });
 
-        // Add a strike to the student
-        await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
+        // Add a strike to the student. Harmless no-op if the account was since
+        // anonymised — isDeleted already blocks that account from logging in.
+        if (order.userId) {
+          await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
+        }
       });
 
       // Check if 3+ strikes → ban for 30 days
-      const user = await prisma.user.findUnique({ where: { id: order.userId }, select: { orderStrikes: true } });
-      if (user && user.orderStrikes >= 3) {
-        await prisma.user.update({
-          where: { id: order.userId },
-          data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
-        });
-        console.log(`[Cron] Student ${order.userId} banned for 30 days after 3 strikes`);
+      if (order.userId) {
+        const user = await prisma.user.findUnique({ where: { id: order.userId }, select: { orderStrikes: true } });
+        if (user && user.orderStrikes >= 3) {
+          await prisma.user.update({
+            where: { id: order.userId },
+            data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
+          });
+          console.log(`[Cron] Student ${order.userId} banned for 30 days after 3 strikes`);
+        }
       }
 
       if (order.slotId) {

@@ -63,7 +63,7 @@ export default function LoginPage() {
     <div className="min-h-screen flex items-center justify-center bg-gray-50">
       <div className="bg-white rounded-2xl shadow-lg p-8 w-full max-w-md">
         <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold text-[#1a1a2e]">CanteenRush</h1>
+          <h1 className="text-3xl font-bold text-[#1a1a2e]">Campus Khana</h1>
           <p className="text-gray-500 mt-1">Vendor & Admin Portal</p>
           <p className="text-xs text-amber-500 mt-2">Use your institution email</p>
         </div>
