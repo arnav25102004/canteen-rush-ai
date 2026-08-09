@@ -181,7 +181,7 @@ export async function uploadItemImage(req: AuthRequest, res: Response) {
   const { id } = req.params;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
 
-  const imageUrl = await uploadImage(req.file.path, 'christ-canteen/menu');
+  const imageUrl = await uploadImage(req.file.path, 'campus-khana/menu');
   const item = await prisma.menuItem.update({ where: { id }, data: { imageUrl } });
   return res.json({ item });
 }

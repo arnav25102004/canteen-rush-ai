@@ -11,7 +11,7 @@ export { cloudinary };
 
 export async function uploadImage(
   filePath: string,
-  folder: string = 'christ-canteen'
+  folder: string = 'campus-khana'
 ): Promise<string> {
   const result = await cloudinary.uploader.upload(filePath, {
     folder,
