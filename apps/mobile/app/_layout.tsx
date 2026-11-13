@@ -49,7 +49,7 @@ export default function RootLayout() {
         axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
         const { data } = await axios.get(`${CONFIG.API_URL}/auth/me`);
         if (data.user) {
-          const { AsyncStorage } = await import('@react-native-async-storage/async-storage');
+          const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
           await AsyncStorage.multiSet([
             ['user', JSON.stringify(data.user)],
             ['auth_token', token],
