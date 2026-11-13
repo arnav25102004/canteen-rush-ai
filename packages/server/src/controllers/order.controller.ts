@@ -9,24 +9,24 @@ import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '
 import { z } from 'zod';
 import { OrderStatus, UserRole } from '@prisma/client';
 
-const ACTIVE_STATUSES = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
-
 const placeOrderSchema = z.object({
   canteenId: z.string().uuid(),
   slotId: z.string().uuid().optional(),
   items: z.array(z.object({
     menuItemId: z.string().uuid(),
-    quantity: z.number().int().positive(),
-    customizations: z.record(z.any()).optional(),
-    notes: z.string().optional(),
-  })).min(1),
-  specialInstructions: z.string().optional(),
+    quantity: z.number().int().positive().max(50),
+    customizations: z.record(z.string(), z.any()).optional(),
+    notes: z.string().max(200).optional(),
+  })).min(1).max(30),
+  specialInstructions: z.string().max(500).optional(),
   pointsToRedeem: z.number().int().min(0).optional().default(0),
 });
 
+// CANCELLED is not here: cancelling goes through cancelOrder() so the slot,
+// wallet credit and points are released.
 const VALID_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
-  [OrderStatus.CONFIRMED]: [OrderStatus.ACCEPTED, OrderStatus.CANCELLED],
-  [OrderStatus.ACCEPTED]: [OrderStatus.PREPARING, OrderStatus.CANCELLED],
+  [OrderStatus.CONFIRMED]: [OrderStatus.ACCEPTED],
+  [OrderStatus.ACCEPTED]: [OrderStatus.PREPARING],
   [OrderStatus.PREPARING]: [OrderStatus.READY],
   [OrderStatus.READY]: [],
 };
@@ -46,10 +46,9 @@ export async function createOrder(req: AuthRequest, res: Response) {
   }
 
   try {
-    const result = await placeOrder({ userId: req.user!.id, ...v.data }, req.io);
+    const result = await placeOrder({ userId: req.user!.id, userRole: req.user!.role, ...v.data }, req.io);
     return res.status(201).json({
       order: result.order,
-      payment: result.payment,
       razorpay: result.razorpay,
       upiAmount: result.upiAmount,
       pointsDiscount: result.pointsDiscount,
@@ -59,132 +58,6 @@ export async function createOrder(req: AuthRequest, res: Response) {
   } catch (err: unknown) {
     return res.status(400).json({ error: (err as Error).message });
   }
-}
-
-export async function claimPayment(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const { bankTransactionId, bankResponseCode } = req.body as { bankTransactionId?: string; bankResponseCode?: string };
-
-  const order = await prisma.order.findUnique({
-    where: { id },
-    select: { userId: true, paymentStatus: true, orderNumber: true, canteenId: true, totalAmount: true },
-  });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  if (order.userId !== req.user!.id) return res.status(403).json({ error: 'Not your order' });
-  if (order.paymentStatus !== 'AWAITING_PAYMENT') {
-    return res.status(400).json({ error: 'Order is not awaiting payment' });
-  }
-
-  await prisma.order.update({
-    where: { id },
-    data: {
-      paymentStatus: 'PENDING_VERIFICATION',
-      paymentClaimedAt: new Date(),
-      bankTransactionId: bankTransactionId || null,
-    },
-  });
-
-  const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
-  ioServer?.to(`canteen:${order.canteenId}`).emit('payment:claimed', {
-    orderId: id,
-    orderNumber: order.orderNumber,
-    amount: Number(order.totalAmount),
-    bankTransactionId: bankTransactionId || null,
-    message: `Student claims payment for Order #${order.orderNumber} — check GPay for ₹${Number(order.totalAmount).toFixed(0)}`,
-  });
-
-  return res.json({ success: true, message: 'Payment claim submitted. Vendor is verifying.' });
-}
-
-export async function getPaymentInfo(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-
-  const order = await prisma.order.findUnique({
-    where: { id },
-    select: { userId: true, paymentStatus: true, orderNumber: true, totalAmount: true, canteenId: true },
-  });
-  if (!order) return res.status(404).json({ error: 'Order not found' });
-  if (order.userId !== req.user!.id) return res.status(403).json({ error: 'Not your order' });
-  if (order.paymentStatus !== 'AWAITING_PAYMENT') {
-    return res.status(400).json({ error: 'Order is not awaiting payment' });
-  }
-
-  const canteen = await prisma.canteen.findUnique({
-    where: { id: order.canteenId },
-    select: { vendorUpiId: true, vendorUpiName: true, name: true },
-  });
-  if (!canteen?.vendorUpiId) return res.status(400).json({ error: 'Canteen UPI not configured' });
-
-  return res.json({
-    vpa: canteen.vendorUpiId,
-    payeeName: canteen.vendorUpiName || canteen.name,
-    amount: Number(order.totalAmount).toFixed(2),
-    transactionRef: `CR${Date.now()}`,
-    transactionNote: order.orderNumber,
-  });
-}
-
-export async function verifyPayment(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const { confirmed } = req.body as { confirmed: boolean };
-
-  const canteenId = req.user!.canteenId;
-  if (!canteenId) return res.status(403).json({ error: 'No canteen assigned' });
-
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: { items: true },
-  });
-
-  if (!order || order.canteenId !== canteenId) return res.status(404).json({ error: 'Order not found' });
-  if (order.paymentStatus !== 'PENDING_VERIFICATION') {
-    return res.status(400).json({ error: 'Order payment is not pending verification' });
-  }
-
-  if (!confirmed) {
-    // Vendor says payment was NOT received — cancel and add strike.
-    // Deleted accounts are anonymised, not removed, so userId still points at a
-    // real row; the strike is harmless there since isDeleted already blocks login.
-    const strikeUserId = order.userId;
-
-    await prisma.$transaction(async (tx) => {
-      await tx.order.update({
-        where: { id },
-        data: { paymentStatus: 'EXPIRED', status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: 'Payment not received — vendor rejected' },
-      });
-      if (strikeUserId) {
-        await tx.user.update({ where: { id: strikeUserId }, data: { orderStrikes: { increment: 1 } } });
-      }
-    });
-
-    if (strikeUserId) {
-      const updatedUser = await prisma.user.findUnique({ where: { id: strikeUserId }, select: { orderStrikes: true } });
-      if (updatedUser && updatedUser.orderStrikes >= 3) {
-        await prisma.user.update({
-          where: { id: strikeUserId },
-          data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
-        });
-      }
-    }
-
-    const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
-    ioServer?.to(`order:${id}`).emit('order:status_update', { orderId: id, status: OrderStatus.CANCELLED, reason: 'Payment not received' });
-    if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CANCELLED);
-    return res.json({ success: true, confirmed: false });
-  }
-
-  // Vendor confirmed payment received
-  const updatedOrder = await prisma.order.update({
-    where: { id },
-    data: { paymentStatus: 'VERIFIED', status: OrderStatus.CONFIRMED, paymentVerifiedAt: new Date() },
-  });
-
-  const ioServer = req.io as { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
-  ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order: updatedOrder });
-  ioServer?.to(`order:${id}`).emit('order:status_update', { orderId: id, status: OrderStatus.CONFIRMED, paymentStatus: 'VERIFIED' });
-  if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.CONFIRMED);
-
-  return res.json({ success: true, confirmed: true, order: updatedOrder });
 }
 
 export async function getLastOrder(req: AuthRequest, res: Response) {
@@ -238,8 +111,9 @@ export async function getOrder(req: AuthRequest, res: Response) {
 
   if (!order) return res.status(404).json({ error: 'Order not found' });
   const isOwner = order.userId === req.user!.id;
-  const isStaff = req.user!.role === UserRole.VENDOR || req.user!.role === UserRole.ADMIN;
-  if (!isOwner && !isStaff) return res.status(403).json({ error: 'Forbidden' });
+  const isAdmin = req.user!.role === UserRole.ADMIN;
+  const isThisCanteensVendor = req.user!.role === UserRole.VENDOR && order.canteen.id === req.user!.canteenId;
+  if (!isOwner && !isAdmin && !isThisCanteensVendor) return res.status(403).json({ error: 'Forbidden' });
 
   return res.json({ order });
 }
@@ -314,15 +188,27 @@ export async function updateOrderStatus(req: AuthRequest, res: Response) {
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.canteenId !== req.user!.canteenId) return res.status(403).json({ error: 'Forbidden' });
 
+  if (status === OrderStatus.CANCELLED) {
+    try {
+      await cancelOrder(id, 'vendor', req.body.reason || 'Cancelled by vendor', req.io);
+      return res.json({ success: true });
+    } catch (err: unknown) {
+      return res.status(400).json({ error: (err as Error).message });
+    }
+  }
+
   const allowed = VALID_TRANSITIONS[order.status] ?? [];
   if (!allowed.includes(status)) {
     return res.status(400).json({ error: `Cannot transition from ${order.status} to ${status}` });
   }
 
-  const updated = await prisma.order.update({
-    where: { id },
+  // Conditional on the status we validated against, so two clicks can't race.
+  const { count } = await prisma.order.updateMany({
+    where: { id, status: order.status },
     data: { status, ...(status === OrderStatus.READY ? { actualReadyAt: new Date() } : {}) },
   });
+  if (count === 0) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+  const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status, estimatedReadyAt: updated.estimatedReadyAt });
   if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, status as OrderStatus);
@@ -343,16 +229,25 @@ export async function scanQR(req: AuthRequest, res: Response) {
 
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { status: true, qrScanned: true, canteenId: true },
+    select: { status: true, qrScanned: true, canteenId: true, paymentMethod: true },
   });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status !== OrderStatus.READY) return res.status(400).json({ error: 'Order is not ready yet' });
   if (order.qrScanned) return res.status(400).json({ error: 'Already collected' });
 
-  const updated = await prisma.order.update({
-    where: { id },
-    data: { status: OrderStatus.PICKED_UP, qrScanned: true, pickedUpAt: new Date() },
+  // Atomic hand-over: a QR can only be redeemed once even if scanned twice at once.
+  // Cash orders are paid at this moment, at the counter.
+  const { count } = await prisma.order.updateMany({
+    where: { id, status: OrderStatus.READY, qrScanned: false },
+    data: {
+      status: OrderStatus.PICKED_UP,
+      qrScanned: true,
+      pickedUpAt: new Date(),
+      ...(order.paymentMethod === 'CASH' ? { paymentStatus: 'PAID' as const, paymentVerifiedAt: new Date() } : {}),
+    },
   });
+  if (count === 0) return res.status(400).json({ error: 'Already collected' });
+  const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.PICKED_UP });
 
@@ -381,7 +276,12 @@ export async function respondToOrder(req: AuthRequest, res: Response) {
   }
 
   if (action === 'ACCEPT') {
-    const updated = await prisma.order.update({ where: { id }, data: { status: OrderStatus.ACCEPTED } });
+    const { count } = await prisma.order.updateMany({
+      where: { id, status: OrderStatus.CONFIRMED },
+      data: { status: OrderStatus.ACCEPTED },
+    });
+    if (count === 0) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+    const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
     emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.ACCEPTED });
     if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.ACCEPTED);
     return res.json({ order: updated });

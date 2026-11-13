@@ -31,7 +31,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
       path: req.path,
       userAgent: req.headers['user-agent'],
     });
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    return res.status(401).json({ error: 'Invalid or expired token, or email not verified' });
   }
 
   const user = await prisma.user.findUnique({
@@ -76,7 +76,6 @@ export function requireRole(...roles: UserRole[]) {
 
 export const requireVendor = requireRole(UserRole.VENDOR, UserRole.ADMIN);
 export const requireAdmin = requireRole(UserRole.ADMIN);
-export const requireStudent = requireRole(UserRole.STUDENT, UserRole.FACULTY, UserRole.ADMIN);
 
 // Attaches user if token present but does not reject unauthenticated requests
 export async function optionalAuthenticate(req: AuthRequest, res: Response, next: NextFunction) {
@@ -102,4 +101,14 @@ export async function optionalAuthenticate(req: AuthRequest, res: Response, next
     };
   }
   next();
+}
+
+/**
+ * Prisma `where` fragment limiting a vendor to their own canteen's rows.
+ * Admins see everything ({}). A vendor with no canteen gets null — callers
+ * must answer 403, since `{ canteenId: undefined }` would match every row.
+ */
+export function canteenScope(req: AuthRequest): { canteenId?: string } | null {
+  if (req.user?.role === UserRole.ADMIN) return {};
+  return req.user?.canteenId ? { canteenId: req.user.canteenId } : null;
 }

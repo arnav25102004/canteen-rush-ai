@@ -1,3 +1,4 @@
+import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
 
 const POINTS_PER_RUPEE = 0.1; // ₹10 = 1 point
@@ -40,36 +41,61 @@ export async function validatePointsRedemption(
   return { valid: true, discountAmount: tier.discount };
 }
 
+/**
+ * Spend points inside the caller's order transaction. The conditional update
+ * makes concurrent orders unable to spend the same points twice.
+ */
 export async function redeemPoints(
+  tx: Prisma.TransactionClient,
   userId: string,
   orderId: string,
   pointsToRedeem: number,
   discountAmount: number
 ): Promise<void> {
-  let loyaltyAccount = await prisma.loyaltyAccount.findUnique({ where: { userId } });
-  if (!loyaltyAccount) throw new Error('No loyalty account found');
+  const { count } = await tx.loyaltyAccount.updateMany({
+    where: { userId, totalPoints: { gte: pointsToRedeem } },
+    data: { totalPoints: { decrement: pointsToRedeem }, totalSaved: { increment: discountAmount } },
+  });
+  if (count === 0) throw new Error('Not enough loyalty points');
 
-  const newBalance = loyaltyAccount.totalPoints - pointsToRedeem;
+  const account = await tx.loyaltyAccount.findUniqueOrThrow({ where: { userId } });
+  await tx.pointTransaction.create({
+    data: {
+      loyaltyId: account.id,
+      orderId,
+      type: 'REDEEMED',
+      points: -pointsToRedeem,
+      description: `Redeemed ${pointsToRedeem} points for ₹${discountAmount} discount`,
+      balanceAfter: account.totalPoints,
+    },
+  });
+}
 
-  await prisma.$transaction([
-    prisma.loyaltyAccount.update({
-      where: { id: loyaltyAccount.id },
-      data: {
-        totalPoints: { decrement: pointsToRedeem },
-        totalSaved: { increment: discountAmount },
-      },
-    }),
-    prisma.pointTransaction.create({
-      data: {
-        loyaltyId: loyaltyAccount.id,
-        orderId,
-        type: 'REDEEMED',
-        points: -pointsToRedeem,
-        description: `Redeemed ${pointsToRedeem} points for ₹${discountAmount} discount`,
-        balanceAfter: newBalance,
-      },
-    }),
-  ]);
+/** Give back points spent on an order that was cancelled. */
+export async function refundRedeemedPoints(
+  tx: Prisma.TransactionClient,
+  userId: string,
+  orderId: string,
+  points: number,
+  discountAmount: number,
+  orderNumber: string
+): Promise<void> {
+  const account = await tx.loyaltyAccount.findUnique({ where: { userId } });
+  if (!account || points <= 0) return;
+  const updated = await tx.loyaltyAccount.update({
+    where: { id: account.id },
+    data: { totalPoints: { increment: points }, totalSaved: { decrement: discountAmount } },
+  });
+  await tx.pointTransaction.create({
+    data: {
+      loyaltyId: account.id,
+      orderId,
+      type: 'BONUS',
+      points,
+      description: `Returned ${points} points for cancelled Order #${orderNumber}`,
+      balanceAfter: updated.totalPoints,
+    },
+  });
 }
 
 export async function awardPointsForOrder(orderId: string): Promise<void> {

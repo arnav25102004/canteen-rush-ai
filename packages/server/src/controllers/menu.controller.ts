@@ -1,12 +1,16 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
-import { AuthRequest } from '../middleware/auth';
+import { AuthRequest, canteenScope } from '../middleware/auth';
 import { uploadImage } from '../config/cloudinary';
 import { z } from 'zod';
+import fs from 'fs';
+
+const NO_CANTEEN = { error: 'No canteen assigned' };
+const NOT_FOUND = { error: 'Not found' };
 
 const categorySchema = z.object({
-  name: z.string().min(1),
-  description: z.string().optional(),
+  name: z.string().min(1).max(80),
+  description: z.string().max(500).optional(),
   sortOrder: z.number().int().optional(),
   availableFrom: z.string().regex(/^\d{2}:\d{2}$/).optional(),
   availableTo: z.string().regex(/^\d{2}:\d{2}$/).optional(),
@@ -14,9 +18,9 @@ const categorySchema = z.object({
 
 const menuItemSchema = z.object({
   categoryId: z.string().uuid(),
-  name: z.string().min(1),
-  description: z.string().optional(),
-  price: z.number().positive(),
+  name: z.string().min(1).max(120),
+  description: z.string().max(500).optional(),
+  price: z.number().positive().max(100000),
   imageUrl: z.string().url().optional(),
   isVeg: z.boolean().optional(),
   isJain: z.boolean().optional(),
@@ -60,9 +64,10 @@ export async function getCanteenMenu(req: Request, res: Response) {
 export async function searchMenuInCanteen(req: Request, res: Response) {
   const { id: canteenId } = req.params;
   const { q } = req.query;
-  if (!q) return res.status(400).json({ error: 'Query param q required' });
+  if (typeof q !== 'string' || !q || q.length > 100) return res.status(400).json({ error: 'Query param q required (max 100 chars)' });
 
   const items = await prisma.menuItem.findMany({
+    take: 50,
     where: {
       canteenId,
       isAvailable: true,
@@ -78,9 +83,10 @@ export async function searchMenuInCanteen(req: Request, res: Response) {
 
 export async function searchMenuGlobal(req: Request, res: Response) {
   const { q } = req.query;
-  if (!q) return res.status(400).json({ error: 'Query param q required' });
+  if (typeof q !== 'string' || !q || q.length > 100) return res.status(400).json({ error: 'Query param q required (max 100 chars)' });
 
   const items = await prisma.menuItem.findMany({
+    take: 50,
     where: {
       isAvailable: true,
       OR: [
@@ -95,6 +101,18 @@ export async function searchMenuGlobal(req: Request, res: Response) {
     orderBy: { totalOrders: 'desc' },
   });
   return res.json({ items });
+}
+
+/** Vendor's own full menu, including items marked unavailable (the public menu hides those). */
+export async function getMyMenu(req: AuthRequest, res: Response) {
+  const canteenId = req.user!.canteenId;
+  if (!canteenId) return res.status(403).json(NO_CANTEEN);
+  const categories = await prisma.menuCategory.findMany({
+    where: { canteenId },
+    orderBy: { sortOrder: 'asc' },
+    include: { items: { orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] } },
+  });
+  return res.json({ canteenId, categories });
 }
 
 // Category CRUD (vendor)
@@ -113,16 +131,23 @@ export async function createCategory(req: AuthRequest, res: Response) {
 
 export async function updateCategory(req: AuthRequest, res: Response) {
   const { id } = req.params;
+  const scope = canteenScope(req);
+  if (!scope) return res.status(403).json(NO_CANTEEN);
   const parse = categorySchema.partial().safeParse(req.body);
   if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
 
-  const category = await prisma.menuCategory.update({ where: { id }, data: parse.data });
+  const { count } = await prisma.menuCategory.updateMany({ where: { id, ...scope }, data: parse.data });
+  if (count === 0) return res.status(404).json(NOT_FOUND);
+  const category = await prisma.menuCategory.findUnique({ where: { id } });
   return res.json({ category });
 }
 
 export async function deleteCategory(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  await prisma.menuCategory.delete({ where: { id } });
+  const scope = canteenScope(req);
+  if (!scope) return res.status(403).json(NO_CANTEEN);
+  const { count } = await prisma.menuCategory.deleteMany({ where: { id, ...scope } });
+  if (count === 0) return res.status(404).json(NOT_FOUND);
   return res.json({ success: true });
 }
 
@@ -135,25 +160,43 @@ export async function createMenuItem(req: AuthRequest, res: Response) {
   if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
 
   const { customizations, ...rest } = parse.data;
+  const category = await prisma.menuCategory.findFirst({ where: { id: rest.categoryId, canteenId } });
+  if (!category) return res.status(400).json({ error: 'Category does not belong to your canteen' });
+
   const item = await prisma.menuItem.create({
     data: { canteenId, ...rest, customizations: customizations ?? [] },
   });
   return res.status(201).json({ item });
 }
 
+/** The menu item, if the caller may manage it; otherwise sends 403/404 and returns null. */
+async function findOwnItem(req: AuthRequest, res: Response) {
+  const scope = canteenScope(req);
+  if (!scope) { res.status(403).json(NO_CANTEEN); return null; }
+  const item = await prisma.menuItem.findFirst({ where: { id: req.params.id, ...scope } });
+  if (!item) { res.status(404).json({ error: 'Item not found' }); return null; }
+  return item;
+}
+
 export async function updateMenuItem(req: AuthRequest, res: Response) {
-  const { id } = req.params;
   const parse = menuItemSchema.partial().safeParse(req.body);
   if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  const existing = await findOwnItem(req, res);
+  if (!existing) return;
 
-  const item = await prisma.menuItem.update({ where: { id }, data: parse.data });
+  if (parse.data.categoryId) {
+    const category = await prisma.menuCategory.findFirst({ where: { id: parse.data.categoryId, canteenId: existing.canteenId } });
+    if (!category) return res.status(400).json({ error: 'Category does not belong to this canteen' });
+  }
+
+  const item = await prisma.menuItem.update({ where: { id: existing.id }, data: parse.data });
   return res.json({ item });
 }
 
 export async function toggleItemAvailability(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  const item = await prisma.menuItem.findUnique({ where: { id } });
-  if (!item) return res.status(404).json({ error: 'Item not found' });
+  const item = await findOwnItem(req, res);
+  if (!item) return;
+  const { id } = item;
 
   const updated = await prisma.menuItem.update({
     where: { id },
@@ -172,18 +215,24 @@ export async function toggleItemAvailability(req: AuthRequest, res: Response) {
 }
 
 export async function deleteMenuItem(req: AuthRequest, res: Response) {
-  const { id } = req.params;
-  await prisma.menuItem.delete({ where: { id } });
+  const item = await findOwnItem(req, res);
+  if (!item) return;
+  await prisma.menuItem.delete({ where: { id: item.id } });
   return res.json({ success: true });
 }
 
 export async function uploadItemImage(req: AuthRequest, res: Response) {
-  const { id } = req.params;
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
-
-  const imageUrl = await uploadImage(req.file.path, 'campus-khana/menu');
-  const item = await prisma.menuItem.update({ where: { id }, data: { imageUrl } });
-  return res.json({ item });
+  const tmpPath = req.file.path;
+  try {
+    const existing = await findOwnItem(req, res);
+    if (!existing) return;
+    const imageUrl = await uploadImage(tmpPath, 'campus-khana/menu');
+    const item = await prisma.menuItem.update({ where: { id: existing.id }, data: { imageUrl } });
+    return res.json({ item });
+  } finally {
+    fs.promises.unlink(tmpPath).catch(() => {}); // multer temp file
+  }
 }
 
 // ─── Favorites ────────────────────────────────────────────────────────────────

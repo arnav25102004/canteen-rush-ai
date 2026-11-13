@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { prisma } from '../config/database';
-import { OrderStatus } from '@prisma/client';
+import { cancelOrder } from '../services/order.service';
 
 export function startAutoCancelJob() {
   let running = false;
@@ -9,8 +9,7 @@ export function startAutoCancelJob() {
     if (running) return;
     running = true;
     try {
-      await cancelUnpaidOrders();
-      await cancelUnverifiedOrders();
+      await cancelUnpaidOnlineOrders();
     } catch (err: any) {
       console.error('[Cron] Auto-cancel job error:', err.message);
     } finally {
@@ -21,114 +20,32 @@ export function startAutoCancelJob() {
   console.log('[Cron] Auto-cancel job scheduled (every 5 minutes)');
 }
 
-async function cancelUnpaidOrders() {
-  // Cancel orders AWAITING_PAYMENT for more than 10 minutes
+/**
+ * Razorpay orders whose payment never completed within 10 minutes. Cash orders
+ * also sit in AWAITING_PAYMENT (they're paid at pickup) and must not be touched.
+ * cancelOrder releases the slot and returns wallet credit and points.
+ */
+async function cancelUnpaidOnlineOrders() {
   const cutoff = new Date(Date.now() - 10 * 60 * 1000);
-  const unpaidOrders = await prisma.order.findMany({
-    where: { paymentStatus: 'AWAITING_PAYMENT', createdAt: { lt: cutoff } },
-    select: {
-      id: true, userId: true, orderNumber: true, slotId: true,
-      walletTransaction: { select: { id: true, amount: true } },
-      user: { select: { isDeleted: true } },
+  const unpaid = await prisma.order.findMany({
+    where: {
+      paymentMethod: 'RAZORPAY',
+      paymentStatus: 'AWAITING_PAYMENT',
+      status: 'PENDING',
+      createdAt: { lt: cutoff },
     },
+    select: { id: true },
   });
 
-  for (const order of unpaidOrders) {
+  for (const { id } of unpaid) {
     try {
-      await prisma.$transaction(async (tx) => {
-        await tx.order.update({
-          where: { id: order.id },
-          data: {
-            paymentStatus: 'EXPIRED',
-            status: OrderStatus.CANCELLED,
-            cancelledAt: new Date(),
-            cancelReason: 'Payment not received within 10 minutes',
-          },
-        });
-
-        // Refund any wallet deduction that was applied at order placement.
-        // Deleted accounts are anonymised (not removed) but their wallet row
-        // was deleted at that time — tx.wallet.update would throw on a
-        // missing row, so skip refunding into a wallet that no longer exists.
-        if (order.userId && !order.user?.isDeleted && order.walletTransaction && Number(order.walletTransaction.amount) > 0) {
-          const wallet = await tx.wallet.update({
-            where: { userId: order.userId },
-            data: { balance: { increment: Number(order.walletTransaction.amount) } },
-          });
-          await tx.walletTransaction.create({
-            data: {
-              walletId: wallet.id,
-              type: 'REFUND',
-              amount: Number(order.walletTransaction.amount),
-              balanceAfter: wallet.balance,
-              description: `Refund for expired Order #${order.orderNumber}`,
-            },
-          });
-        }
-      });
-
-      if (order.slotId) {
-        await prisma.pickupSlot.update({ where: { id: order.slotId }, data: { currentOrders: { decrement: 1 } } });
-      }
+      await cancelOrder(id, 'system', 'Payment not received within 10 minutes');
     } catch (err: any) {
-      console.error(`[Cron] Failed to cancel unpaid order ${order.id}:`, err.message);
+      console.error(`[Cron] Failed to cancel unpaid order ${id}:`, err.message);
     }
   }
 
-  if (unpaidOrders.length > 0) {
-    console.log(`[Cron] Auto-cancelled ${unpaidOrders.length} unpaid orders (AWAITING_PAYMENT timeout)`);
-  }
-}
-
-async function cancelUnverifiedOrders() {
-  // Cancel orders PENDING_VERIFICATION for more than 15 minutes (vendor didn't confirm)
-  const cutoff = new Date(Date.now() - 15 * 60 * 1000);
-  const unverifiedOrders = await prisma.order.findMany({
-    where: { paymentStatus: 'PENDING_VERIFICATION', paymentClaimedAt: { lt: cutoff } },
-    select: { id: true, userId: true, orderNumber: true, slotId: true },
-  });
-
-  for (const order of unverifiedOrders) {
-    try {
-      await prisma.$transaction(async (tx) => {
-        await tx.order.update({
-          where: { id: order.id },
-          data: {
-            paymentStatus: 'EXPIRED',
-            status: OrderStatus.CANCELLED,
-            cancelledAt: new Date(),
-            cancelReason: 'Payment not verified by vendor within 15 minutes',
-          },
-        });
-
-        // Add a strike to the student. Harmless no-op if the account was since
-        // anonymised — isDeleted already blocks that account from logging in.
-        if (order.userId) {
-          await tx.user.update({ where: { id: order.userId }, data: { orderStrikes: { increment: 1 } } });
-        }
-      });
-
-      // Check if 3+ strikes → ban for 30 days
-      if (order.userId) {
-        const user = await prisma.user.findUnique({ where: { id: order.userId }, select: { orderStrikes: true } });
-        if (user && user.orderStrikes >= 3) {
-          await prisma.user.update({
-            where: { id: order.userId },
-            data: { strikeBannedUntil: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000) },
-          });
-          console.log(`[Cron] Student ${order.userId} banned for 30 days after 3 strikes`);
-        }
-      }
-
-      if (order.slotId) {
-        await prisma.pickupSlot.update({ where: { id: order.slotId }, data: { currentOrders: { decrement: 1 } } });
-      }
-    } catch (err: any) {
-      console.error(`[Cron] Failed to cancel unverified order ${order.id}:`, err.message);
-    }
-  }
-
-  if (unverifiedOrders.length > 0) {
-    console.log(`[Cron] Auto-cancelled ${unverifiedOrders.length} unverified orders (PENDING_VERIFICATION timeout)`);
+  if (unpaid.length > 0) {
+    console.log(`[Cron] Auto-cancelled ${unpaid.length} unpaid Razorpay orders`);
   }
 }

@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import { getWallet, getTransactions, getSpendingSummary } from '../controllers/wallet.controller';
 import { authenticate } from '../middleware/auth';
 

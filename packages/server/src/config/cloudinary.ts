@@ -19,7 +19,3 @@ export async function uploadImage(
   });
   return result.secure_url;
 }
-
-export async function deleteImage(publicId: string): Promise<void> {
-  await cloudinary.uploader.destroy(publicId);
-}

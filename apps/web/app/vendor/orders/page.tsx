@@ -5,7 +5,7 @@ import api from '../../../lib/api';
 
 interface Order {
   id: string; orderNumber: string; status: string; totalAmount: number; createdAt: string;
-  paymentStatus: string; upiOrderNote?: string;
+  paymentStatus: string; paymentMethod: string; upiOrderNote?: string;
   specialInstructions?: string;
   user: { name: string; phone?: string };
   items: { quantity: number; menuItem: { name: string }; notes?: string }[];
@@ -50,11 +50,6 @@ export default function OrdersPage() {
 
   async function updateStatus(id: string, status: string) {
     await api.patch(`/orders/vendor/${id}/status`, { status });
-    load();
-  }
-
-  async function verifyPayment(id: string, confirmed: boolean) {
-    await api.patch(`/orders/vendor/${id}/verify-payment`, { confirmed });
     load();
   }
 
@@ -113,27 +108,8 @@ export default function OrdersPage() {
               <div className="grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-4">
                 {slotOrders.map((order) => (
                   <div key={order.id} className={`bg-white rounded-xl border-l-4 p-4 shadow-sm ${statusColors[order.status] || ''}`}>
-                    {/* Payment verification banner */}
-                    {order.paymentStatus === 'PENDING_VERIFICATION' && (
-                      <div className="mb-3 bg-amber-50 border border-amber-300 rounded-lg p-3">
-                        <p className="text-sm font-bold text-amber-800 mb-1">🟡 Student says they've paid ₹{Number(order.totalAmount).toFixed(0)}</p>
-                        {order.upiOrderNote && (
-                          <p className="text-xs text-amber-700 mb-2">Check your GPay/PhonePe for: <strong>{order.upiOrderNote}</strong></p>
-                        )}
-                        <div className="flex gap-2">
-                          <button onClick={() => verifyPayment(order.id, true)}
-                            className="flex-1 text-xs bg-green-600 text-white py-2 rounded-lg font-bold hover:bg-green-700">
-                            ✅ Yes, Received
-                          </button>
-                          <button onClick={() => verifyPayment(order.id, false)}
-                            className="flex-1 text-xs bg-red-500 text-white py-2 rounded-lg font-bold hover:bg-red-600">
-                            ❌ Not Received
-                          </button>
-                        </div>
-                      </div>
-                    )}
-                    {order.paymentStatus === 'AWAITING_PAYMENT' && (
-                      <div className="mb-2 text-xs text-amber-600 font-medium">⏳ Waiting for student to pay</div>
+                    {order.paymentMethod === 'CASH' && order.paymentStatus === 'AWAITING_PAYMENT' && (
+                      <div className="mb-2 text-xs text-amber-600 font-medium">💵 Collect ₹{Number(order.totalAmount).toFixed(0)} cash at pickup</div>
                     )}
                     <div className="flex justify-between items-start mb-2">
                       <div>
@@ -143,7 +119,7 @@ export default function OrdersPage() {
                       </div>
                       <div className="text-right">
                         <span className="text-sm font-bold">₹{Number(order.totalAmount).toFixed(0)}</span>
-                        <p className="text-xs text-gray-400">💰 Wallet</p>
+                        <p className="text-xs text-gray-400">{order.paymentMethod === 'CASH' ? '💵 Cash' : order.paymentMethod === 'RAZORPAY' ? '💳 Online' : '💰 Wallet'}</p>
                       </div>
                     </div>
                     <ul className="text-xs text-gray-600 mb-3 space-y-0.5">

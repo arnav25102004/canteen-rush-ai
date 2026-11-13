@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import { razorpayWebhook } from '../controllers/payment.controller';
 
 const router = Router();

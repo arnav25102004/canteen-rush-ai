@@ -24,9 +24,9 @@ export default function VendorSettingsPage() {
       .then(({ data }) => setSettings({
         name: data.canteen.name || '',
         description: data.canteen.description || '',
-        openTime: data.canteen.openTime || '08:00',
-        closeTime: data.canteen.closeTime || '20:00',
-        isOpen: data.canteen.isOpen ?? true,
+        openTime: data.canteen.openingTime || '08:00',
+        closeTime: data.canteen.closingTime || '20:00',
+        isOpen: data.canteen.isActive ?? true,
       }))
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -37,7 +37,13 @@ export default function VendorSettingsPage() {
     setSaving(true);
     setMessage('');
     try {
-      await api.put('/canteens/my', settings);
+      await api.put('/canteens/my', {
+        name: settings.name,
+        description: settings.description,
+        openingTime: settings.openTime,
+        closingTime: settings.closeTime,
+        isActive: settings.isOpen,
+      });
       setMessage('Settings saved successfully.');
     } catch {
       setMessage('Failed to save settings. Please try again.');

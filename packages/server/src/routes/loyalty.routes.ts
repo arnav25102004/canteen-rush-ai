@@ -1,4 +1,5 @@
-import { Router, Response } from 'express';
+import { Response } from 'express';
+import { Router } from '../utils/router';
 import { authenticate } from '../middleware/auth';
 import { AuthRequest } from '../middleware/auth';
 import { getLoyaltyAccount, getRedemptionTiers, validatePointsRedemption } from '../services/loyalty.service';

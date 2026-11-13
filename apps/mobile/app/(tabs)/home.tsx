@@ -123,7 +123,7 @@ export default function HomeScreen() {
               <Text style={styles.reorderBtnText}>Reorder →</Text>
             </TouchableOpacity>
           </View>
-        ) : null}
+        ) : undefined}
         renderItem={({ item: c }) => (
           <TouchableOpacity style={styles.card} onPress={() => router.push(`/canteen/${c.id}`)}>
             <View style={styles.cardHeader}>

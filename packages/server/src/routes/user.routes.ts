@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import { deleteAccount } from '../controllers/user.controller';
 import { authenticate } from '../middleware/auth';
 

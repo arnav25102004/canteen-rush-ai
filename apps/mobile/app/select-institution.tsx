@@ -54,7 +54,7 @@ export default function SelectInstitutionScreen() {
             </View>
           </TouchableOpacity>
         )}
-        ListEmptyComponent={!loading ? <Text style={styles.empty}>No institutions found.</Text> : null}
+        ListEmptyComponent={!loading ? <Text style={styles.empty}>No institutions found.</Text> : undefined}
       />
     </SafeAreaView>
   );

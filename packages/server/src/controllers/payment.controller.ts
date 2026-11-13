@@ -3,6 +3,7 @@ import crypto from 'crypto';
 import { prisma } from '../config/database';
 import { sendOrderNotification } from '../services/notification.service';
 import { generatePickupCode } from '../utils/helpers';
+import { cancelOrder } from '../services/order.service';
 import { OrderStatus } from '@prisma/client';
 
 interface RawRequest extends Request {
@@ -63,15 +64,38 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
       return res.status(404).json({ error: 'Order not found' });
     }
 
-    if (order.paymentStatus === 'PAID') {
-      // Idempotency: already processed
+    // Money arrived for an order that was already cancelled (e.g. the student
+    // paid after the 10-minute timeout). Credit the wallet once, never resurrect it.
+    if (order.status === OrderStatus.CANCELLED) {
+      await prisma.$transaction(async (tx) => {
+        const { count } = await tx.order.updateMany({
+          where: { id: order.id, paymentStatus: { notIn: ['PAID', 'REFUNDED'] } },
+          data: { paymentStatus: 'REFUNDED', razorpayPaymentId },
+        });
+        if (count === 0 || !order.userId) return;
+        const wallet = await tx.wallet.upsert({
+          where: { userId: order.userId },
+          update: { balance: { increment: order.totalAmount } },
+          create: { userId: order.userId, balance: order.totalAmount },
+        });
+        await tx.walletTransaction.create({
+          data: {
+            walletId: wallet.id,
+            type: 'REFUND',
+            amount: order.totalAmount,
+            balanceAfter: wallet.balance,
+            description: `Late payment refunded for cancelled Order #${order.orderNumber}`,
+          },
+        });
+      });
       return res.json({ status: 'ok' });
     }
 
     const pickupCode = generatePickupCode();
 
-    await prisma.order.update({
-      where: { id: order.id },
+    // Conditional update = idempotent: Razorpay retries webhooks.
+    const { count } = await prisma.order.updateMany({
+      where: { id: order.id, status: OrderStatus.PENDING, paymentStatus: 'AWAITING_PAYMENT' },
       data: {
         status: OrderStatus.CONFIRMED,
         paymentStatus: 'PAID',
@@ -81,8 +105,9 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
         paymentVerifiedAt: new Date(),
       },
     });
+    if (count === 0) return res.json({ status: 'ok' });
 
-    const updatedOrder = { ...order, status: OrderStatus.CONFIRMED, pickupCode };
+    const updatedOrder = { ...order, status: OrderStatus.CONFIRMED, paymentStatus: 'PAID', pickupCode };
 
     req.io?.to(`canteen:${order.canteenId}`).emit('order:new', { order: updatedOrder });
     req.io?.to(`order:${order.id}`).emit('order:status_update', {
@@ -93,33 +118,20 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
     });
 
     if (order.userId) await sendOrderNotification(order.userId, order.id, order.orderNumber, OrderStatus.CONFIRMED);
-    console.log(`[Webhook] Order ${order.orderNumber} confirmed, pickupCode: ${pickupCode}`);
+    console.log(`[Webhook] Order ${order.orderNumber} confirmed`);
   }
 
   if (event === 'payment.failed') {
     const razorpayOrderId = payload.payment.entity.order_id;
-
     const order = await prisma.order.findUnique({
       where: { razorpayOrderId },
-      select: { id: true, userId: true, canteenId: true, orderNumber: true, status: true },
+      select: { id: true, orderNumber: true, status: true },
     });
 
     if (order && order.status === OrderStatus.PENDING) {
-      await prisma.order.update({
-        where: { id: order.id },
-        data: {
-          paymentStatus: 'FAILED',
-          status: OrderStatus.CANCELLED,
-          cancelledAt: new Date(),
-          cancelReason: 'Razorpay payment failed',
-        },
-      });
-
-      req.io?.to(`order:${order.id}`).emit('order:status_update', {
-        orderId: order.id,
-        status: OrderStatus.CANCELLED,
-        paymentStatus: 'FAILED',
-      });
+      // cancelOrder also returns any wallet credit / points used on this order.
+      await cancelOrder(order.id, 'system', 'Razorpay payment failed', req.io, { paymentStatus: 'FAILED' })
+        .catch((err) => console.warn(`[Webhook] Cancel after failed payment skipped: ${err.message}`));
       console.log(`[Webhook] Payment failed for order ${order.orderNumber}`);
     }
   }

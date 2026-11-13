@@ -2,7 +2,7 @@
 export const dynamic = 'force-dynamic';
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { signInWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, sendEmailVerification, signOut } from 'firebase/auth';
 import { auth } from '../../lib/firebase';
 import api from '../../lib/api';
 
@@ -18,6 +18,12 @@ export default function LoginPage() {
     setLoading(true); setError('');
     try {
       const credential = await signInWithEmailAndPassword(auth, email, password);
+      if (!credential.user.emailVerified) {
+        await sendEmailVerification(credential.user);
+        await signOut(auth);
+        setError('Please verify your email first. We sent a verification link to your inbox.');
+        return;
+      }
       const token = await credential.user.getIdToken();
 
       localStorage.setItem('auth_token', token);
@@ -29,9 +35,9 @@ export default function LoginPage() {
         userData = data.user;
       } catch (meErr: any) {
         if (meErr?.response?.status === 401) {
-          // First login — register in DB
-          const role = email.toLowerCase().includes('admin') ? 'ADMIN' : 'VENDOR';
-          const { data } = await api.post('/auth/register', { firebaseToken: token, email, role });
+          // First login — register in DB. The server decides the role
+          // (ADMIN_EMAILS allowlist, otherwise STUDENT until an admin promotes).
+          const { data } = await api.post('/auth/register', { firebaseToken: token });
           userData = data.user;
         } else {
           throw meErr;
@@ -40,8 +46,16 @@ export default function LoginPage() {
 
       const user = userData;
 
+      if (user.role !== 'ADMIN' && user.role !== 'VENDOR') {
+        localStorage.clear();
+        await signOut(auth);
+        setError('This account is not a vendor or admin. Ask an admin to grant access.');
+        return;
+      }
+
       localStorage.setItem('user_role', user.role);
       localStorage.setItem('user_id', user.id);
+      if (user.vendorCanteen?.id) localStorage.setItem('canteen_id', user.vendorCanteen.id);
 
       if (user.role === 'ADMIN') router.push('/admin/dashboard');
       else router.push('/vendor/dashboard');

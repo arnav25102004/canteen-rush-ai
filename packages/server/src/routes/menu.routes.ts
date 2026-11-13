@@ -1,9 +1,9 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import {
   createCategory, updateCategory, deleteCategory,
   createMenuItem, updateMenuItem, deleteMenuItem,
   toggleItemAvailability, uploadItemImage,
-  getFavorites, addFavorite, removeFavorite,
+  getFavorites, addFavorite, removeFavorite, getMyMenu,
 } from '../controllers/menu.controller';
 import { authenticate, requireVendor } from '../middleware/auth';
 import multer from 'multer';
@@ -28,6 +28,9 @@ export const upload = multer({
 });
 
 const router = Router();
+
+// Vendor's own menu (all items, including unavailable)
+router.get('/my-menu', authenticate, requireVendor, getMyMenu);
 
 // Category management (vendor)
 router.post('/categories', authenticate, requireVendor, createCategory);

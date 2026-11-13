@@ -1,6 +1,6 @@
 import { Response } from 'express';
 import { prisma } from '../config/database';
-import { firebaseAdmin } from '../config/firebase';
+import { deleteFirebaseUser } from '../config/firebase';
 import { AuthRequest } from '../middleware/auth';
 import { logger } from '../utils/logger';
 
@@ -51,7 +51,7 @@ export async function deleteAccount(req: AuthRequest, res: Response) {
 
     // Delete from Firebase Auth after DB anonymisation succeeds
     try {
-      await firebaseAdmin.auth().deleteUser(firebaseUid);
+      await deleteFirebaseUser(firebaseUid);
     } catch (fbErr) {
       // Log but don't fail — DB record is already anonymised
       logger.warn('Firebase user deletion failed after DB anonymisation', { firebaseUid, err: fbErr });
