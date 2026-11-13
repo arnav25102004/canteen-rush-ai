@@ -66,29 +66,39 @@ export default function VendorDashboard() {
 
   useEffect(() => {
     loadData();
-    const canteenId = localStorage.getItem('canteen_id');
-    if (!canteenId) return;
+    let s: ReturnType<typeof io> | undefined;
+    let cancelled = false;
 
-    const s = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'https://canteen-rush-ai.onrender.com', {
-      transports: ['websocket', 'polling'],
-      reconnection: true,
-      reconnectionDelay: 1000,
-      reconnectionAttempts: 10,
-      // Fetched per (re)connect: the server rejects unauthenticated handshakes
-      // and only lets the assigned vendor join this canteen's room.
-      auth: (cb) => {
-        const user = auth.currentUser;
-        if (!user) return cb({ token: null });
-        user.getIdToken(false)
-          .then((token) => cb({ token }))
-          .catch(() => cb({ token: null }));
-      },
-    });
-    s.emit('join:canteen', { canteenId });
-    s.on('order:new', () => loadData());
-    s.on('order:status_update', () => loadData());
-    setSocket(s);
-    return () => { s.disconnect(); };
+    // canteen_id is saved at login; older sessions fetch it once from /auth/me
+    (async () => {
+      let canteenId = localStorage.getItem('canteen_id');
+      if (!canteenId) {
+        const { data } = await api.get('/auth/me').catch(() => ({ data: null as any }));
+        canteenId = data?.user?.vendorCanteen?.id ?? null;
+        if (canteenId) localStorage.setItem('canteen_id', canteenId);
+      }
+      if (!canteenId || cancelled) return;
+
+      s = io(process.env.NEXT_PUBLIC_SOCKET_URL || 'https://canteen-rush-ai.onrender.com', {
+        transports: ['websocket', 'polling'],
+        reconnection: true,
+        reconnectionDelay: 1000,
+        reconnectionAttempts: 10,
+        // Fetched per (re)connect: the server rejects unauthenticated handshakes
+        // and only lets the assigned vendor join this canteen's room.
+        auth: (cb) => {
+          auth.authStateReady()
+            .then(() => auth.currentUser?.getIdToken() ?? null)
+            .then((token) => cb({ token }))
+            .catch(() => cb({ token: null }));
+        },
+      });
+      s.emit('join:canteen', { canteenId });
+      s.on('order:new', () => loadData());
+      s.on('order:status_update', () => loadData());
+      setSocket(s);
+    })();
+    return () => { cancelled = true; s?.disconnect(); };
   }, [loadData]);
 
   async function markStatus(orderId: string, next: string) {

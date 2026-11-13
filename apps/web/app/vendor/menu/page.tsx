@@ -13,35 +13,50 @@ interface Category {
 
 export default function MenuPage() {
   const [categories, setCategories] = useState<Category[]>([]);
-  const [canteenId, setCanteenId] = useState('');
   const [showForm, setShowForm] = useState(false);
+  const [newCategory, setNewCategory] = useState('');
   const [form, setForm] = useState({ name: '', price: '', categoryId: '', description: '', prepTimeMinutes: '10', isVeg: true });
 
-  useEffect(() => {
-    const cid = localStorage.getItem('canteen_id') || '';
-    setCanteenId(cid);
-    if (cid) load(cid);
-  }, []);
-
-  const load = useCallback(async (cid: string) => {
-    const { data } = await api.get(`/canteens/${cid}/menu`);
+  // Vendor's own menu, including unavailable items (the public menu hides them,
+  // which used to make toggled-off items vanish with no way to turn them back on).
+  const load = useCallback(async () => {
+    const { data } = await api.get('/vendor/my-menu');
     setCategories(data.categories || []);
   }, []);
 
+  useEffect(() => { load(); }, [load]);
+
+  const errorText = (e: any) => {
+    const err = e?.response?.data?.error;
+    return typeof err === 'string' ? err : 'Request failed. Check the fields and try again.';
+  };
+
   async function toggleAvailability(itemId: string) {
     await api.patch(`/vendor/items/${itemId}/availability`);
-    load(canteenId);
+    load();
+  }
+
+  async function addCategory() {
+    if (!newCategory.trim()) return;
+    try {
+      await api.post('/vendor/categories', { name: newCategory.trim() });
+      setNewCategory('');
+      load();
+    } catch (e) { alert(errorText(e)); }
   }
 
   async function addItem() {
-    await api.post('/vendor/items', {
-      ...form,
-      price: parseFloat(form.price),
-      prepTimeMinutes: parseInt(form.prepTimeMinutes),
-    });
-    setShowForm(false);
-    setForm({ name: '', price: '', categoryId: '', description: '', prepTimeMinutes: '10', isVeg: true });
-    load(canteenId);
+    try {
+      await api.post('/vendor/items', {
+        ...form,
+        description: form.description || undefined,
+        price: parseFloat(form.price),
+        prepTimeMinutes: parseInt(form.prepTimeMinutes),
+      });
+      setShowForm(false);
+      setForm({ name: '', price: '', categoryId: '', description: '', prepTimeMinutes: '10', isVeg: true });
+      load();
+    } catch (e) { alert(errorText(e)); }
   }
 
   return (
@@ -50,10 +65,17 @@ export default function MenuPage() {
       <main className="flex-1 p-8 bg-gray-50">
         <div className="flex items-center justify-between mb-6">
           <h1 className="text-2xl font-bold text-gray-800">Menu Management</h1>
+          <div className="flex gap-2">
+            <input placeholder="New category" value={newCategory} onChange={e => setNewCategory(e.target.value)}
+              className="border rounded-lg px-3 py-2 text-sm" />
+            <button onClick={addCategory} className="bg-[#1a1a2e] text-white px-4 py-2 rounded-lg text-sm font-medium">
+              + Category
+            </button>
           <button onClick={() => setShowForm(!showForm)}
             className="bg-[#e94560] text-white px-4 py-2 rounded-lg text-sm font-medium">
             + Add Item
           </button>
+          </div>
         </div>
 
         {showForm && (
