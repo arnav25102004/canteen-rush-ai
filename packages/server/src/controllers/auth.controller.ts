@@ -1,6 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
-import { verifyFirebaseToken } from '../config/firebase';
+import { verifyFirebaseToken, devAuthEnabled } from '../config/firebase';
 import { AuthRequest } from '../middleware/auth';
 import { UserRole } from '@prisma/client';
 import { z } from 'zod';
@@ -31,15 +31,26 @@ async function findInstitutionByEmail(email: string) {
   });
 }
 
-// ─── Dev-mode login (only when Firebase is not configured) ────────────────────
+/**
+ * Role for a brand-new account. Never taken from the client: everyone starts
+ * as STUDENT except emails listed in ADMIN_EMAILS (comma-separated). Vendors
+ * are promoted by an admin from the admin Users page.
+ */
+export function initialRoleFor(email: string): UserRole {
+  const admins = (process.env.ADMIN_EMAILS || '')
+    .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
+  return admins.includes(email.toLowerCase()) ? UserRole.ADMIN : UserRole.STUDENT;
+}
+
+// ─── Dev-mode login (local only: NODE_ENV!=production AND DEV_AUTH=true) ──────
 function makeMockToken(uid: string, email: string): string {
   const payload = Buffer.from(JSON.stringify({ uid, email, name: uid })).toString('base64');
   return `dev.${payload}.mock`;
 }
 
 export async function devLogin(req: Request, res: Response) {
-  if (process.env.NODE_ENV === 'production') {
-    return res.status(404).json({ error: 'Not available in production' });
+  if (!devAuthEnabled()) {
+    return res.status(404).json({ error: 'Not found' });
   }
 
   const { email, name, role } = req.body as { email: string; name?: string; role?: string };
@@ -92,13 +103,13 @@ export async function devLogin(req: Request, res: Response) {
   return res.json({ user, token, institution });
 }
 
+// role and email are deliberately absent: email comes from the verified
+// Firebase token and role from initialRoleFor(). Extra body keys are ignored.
 const registerSchema = z.object({
   firebaseToken: z.string(),
-  name: z.string().min(2).optional(),
-  email: z.string().email().optional(),
-  role: z.nativeEnum(UserRole).optional().default(UserRole.STUDENT),
-  campus: z.string().optional(),
-  phone: z.string().optional(),
+  name: z.string().min(2).max(80).optional(),
+  campus: z.string().max(80).optional(),
+  phone: z.string().max(20).optional(),
 });
 
 const updateProfileSchema = z.object({
@@ -113,14 +124,17 @@ export async function register(req: Request, res: Response) {
   const parse = registerSchema.safeParse(req.body);
   if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
 
-  const { firebaseToken, role, campus, phone } = parse.data;
+  const { firebaseToken, campus, phone } = parse.data;
 
   const decoded = await verifyFirebaseToken(firebaseToken);
-  if (!decoded) return res.status(401).json({ error: 'Invalid Firebase token' });
+  if (!decoded) return res.status(401).json({ error: 'Invalid token or email not verified' });
 
-  // Fall back to values from the Firebase token (covers Google Sign-In)
-  const email: string = parse.data.email || decoded.email || '';
+  // Email only ever comes from the verified token — a body-supplied email
+  // would let anyone claim (and take over) another person's account.
+  const email = (decoded.email || '').toLowerCase();
+  if (!email) return res.status(400).json({ error: 'Account has no email address' });
   const name: string = parse.data.name || (decoded as any).name || email.split('@')[0];
+  const role = initialRoleFor(email);
 
   const institution = await findInstitutionByEmail(email);
   if (!institution) {
@@ -134,7 +148,8 @@ export async function register(req: Request, res: Response) {
 
   const department = extractDepartment(email);
 
-  // If user exists by email (e.g. seeded via devLogin), link the real Firebase UID
+  // Existing row with this email (e.g. seeded): safe to link because the token
+  // proves ownership of the inbox. Role is left untouched.
   const existingByEmail = await prisma.user.findUnique({ where: { email } });
   if (existingByEmail) {
     const user = await prisma.user.update({

@@ -19,8 +19,9 @@ export default function RegisterScreen() {
     if (password.length < 6) { Alert.alert('Password must be at least 6 characters'); return; }
     setLoading(true);
     try {
-      await register(name, email, password);
-      router.replace('/(tabs)/home');
+      await register(name, email.trim().toLowerCase(), password);
+      Alert.alert('Verify your email', 'We sent a verification link to your inbox. Open it, then sign in.');
+      router.replace('/(auth)/login');
     } catch (e: any) {
       const msg = e?.response?.data?.error || e?.message || 'Something went wrong';
       Alert.alert('Error', msg);

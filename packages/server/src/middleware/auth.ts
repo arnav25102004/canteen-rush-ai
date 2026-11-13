@@ -31,7 +31,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
       path: req.path,
       userAgent: req.headers['user-agent'],
     });
-    return res.status(401).json({ error: 'Invalid or expired token' });
+    return res.status(401).json({ error: 'Invalid or expired token, or email not verified' });
   }
 
   const user = await prisma.user.findUnique({

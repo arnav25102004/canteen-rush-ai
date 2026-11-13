@@ -2,7 +2,7 @@ import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import axios from 'axios';
 import { auth } from '../firebaseConfig';
-import { signInWithEmailAndPassword, createUserWithEmailAndPassword } from 'firebase/auth';
+import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, signOut, updateProfile } from 'firebase/auth';
 import { CONFIG } from '../config';
 
 // Auto-refresh Firebase token on every request
@@ -115,6 +115,12 @@ export const useAuthStore = create<AuthStore>((set) => ({
 
   login: async (email, password) => {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
+    // The server rejects tokens for unverified emails — catch it here with a clear message.
+    if (!userCredential.user.emailVerified) {
+      await sendEmailVerification(userCredential.user);
+      await signOut(auth);
+      throw new Error('Please verify your email first. We sent a new verification link to your inbox.');
+    }
     const token = await userCredential.user.getIdToken();
     applyToken(token);
 
@@ -127,9 +133,7 @@ export const useAuthStore = create<AuthStore>((set) => ({
       if (error.response?.status === 404 || error.response?.status === 401) {
         const { data } = await axios.post(`${CONFIG.API_URL}/auth/register`, {
           firebaseToken: token,
-          name: email.split('@')[0],
-          email,
-          role: 'STUDENT',
+          name: userCredential.user.displayName || email.split('@')[0],
         });
         const user = mapUser(data.user);
         await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
@@ -140,24 +144,18 @@ export const useAuthStore = create<AuthStore>((set) => ({
     }
   },
 
+  // Creates the Firebase account and sends a verification email. The backend
+  // account is created on first login, once the email is verified.
   register: async (name, email, password) => {
     const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-    const token = await userCredential.user.getIdToken();
-    applyToken(token);
-
-    const { data } = await axios.post(`${CONFIG.API_URL}/auth/register`, {
-      firebaseToken: token,
-      name,
-      email,
-      role: 'STUDENT',
-    });
-    const user = mapUser(data.user);
-    await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
-    set({ user, token });
+    await updateProfile(userCredential.user, { displayName: name });
+    await sendEmailVerification(userCredential.user);
+    await signOut(auth);
   },
 
   logout: async () => {
     applyToken(null);
+    await signOut(auth).catch(() => {});
     await AsyncStorage.multiRemove(['user', 'auth_token', 'institution']);
     set({ user: null, token: null, institution: null });
   },
