@@ -17,6 +17,10 @@ services:
         generateValue: true
       - key: ADMIN_EMAILS
         sync: false
+      - key: RAZORPAY_ENABLED
+        value: "false"
+      - key: RAZORPAY_WEBHOOK_SECRET
+        sync: false
       - key: RAZORPAY_KEY_ID
         sync: false
       - key: RAZORPAY_KEY_SECRET

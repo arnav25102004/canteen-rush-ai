@@ -31,15 +31,6 @@ services:
       timeout: 5s
       retries: 5
 
-  mongo:
-    image: mongo:7-jammy
-    container_name: christ_canteen_mongo
-    ports:
-      - "27017:27017"
-    volumes:
-      - mongodata:/data/db
-
 volumes:
   pgdata:
   redisdata:
-  mongodata:

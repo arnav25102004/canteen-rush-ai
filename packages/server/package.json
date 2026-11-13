@@ -12,19 +12,15 @@
     "studio": "prisma studio",
     "generate": "prisma generate",
     "test": "vitest run",
-    "test:watch": "vitest",
-    "android": "expo run:android",
-    "ios": "expo run:ios"
+    "test:watch": "vitest"
   },
   "dependencies": {
     "@prisma/client": "^5.10.2",
-    "bcryptjs": "^2.4.3",
     "cloudinary": "^2.0.3",
-    "compression": "^1.7.4",
+    "compression": "^1.8.2",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "esbuild": "^0.28.0",
-    "expo": "~54.0.33",
     "express": "^4.18.3",
     "express-rate-limit": "^7.2.0",
     "firebase-admin": "^12.0.0",
@@ -32,14 +28,11 @@
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
-    "multer": "^1.4.5-lts.1",
+    "multer": "^2.5.0",
     "node-cron": "^3.0.3",
     "qrcode": "^1.5.3",
     "razorpay": "^2.9.2",
-    "react": "19.1.0",
-    "react-native": "0.81.5",
     "socket.io": "^4.7.5",
-    "uuid": "^9.0.1",
     "winston": "^3.19.0",
     "zod": "^3.22.4"
   },
@@ -47,7 +40,6 @@
     "seed": "ts-node --project tsconfig.seed.json --require dotenv/config prisma/seed.ts"
   },
   "devDependencies": {
-    "@types/bcryptjs": "^2.4.6",
     "@types/compression": "^1.8.1",
     "@types/cors": "^2.8.17",
     "@types/express": "^4.17.25",
@@ -58,7 +50,6 @@
     "@types/node-cron": "^3.0.11",
     "@types/qrcode": "^1.5.6",
     "@types/supertest": "^7.2.1",
-    "@types/uuid": "^9.0.8",
     "prisma": "^5.10.2",
     "supertest": "^7.2.2",
     "ts-node": "^10.9.2",
