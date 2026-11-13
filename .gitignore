@@ -259,3 +259,6 @@ replay_pid*.log
 
 # Build artifacts
 *.tsbuildinfo
+
+# graphify knowledge graph (local, regenerate with /graphify)
+graphify-out/
