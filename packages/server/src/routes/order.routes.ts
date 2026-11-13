@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import {
   createOrder, getMyOrders, getOrder, getOrderQR,
   studentCancelOrder, getVendorOrders, updateOrderStatus, scanQR, getPrepSheet,

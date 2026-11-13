@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import { register, getMe, updateMe, saveFcmToken, devLogin } from '../controllers/auth.controller';
 import { authenticate } from '../middleware/auth';
 

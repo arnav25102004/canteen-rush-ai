@@ -23,8 +23,9 @@ export function generatePickupCode(): string {
 }
 
 export function parsePagination(page: string = '1', limit: string = '20') {
-  const p = Math.max(1, parseInt(page));
-  const l = Math.min(100, Math.max(1, parseInt(limit)));
+  const int = (v: string, fallback: number) => (Number.isNaN(parseInt(v)) ? fallback : parseInt(v));
+  const p = Math.max(1, int(page, 1));
+  const l = Math.min(100, Math.max(1, int(limit, 20)));
   return { skip: (p - 1) * l, take: l, page: p, limit: l };
 }
 

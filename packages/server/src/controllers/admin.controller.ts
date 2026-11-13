@@ -3,6 +3,7 @@ import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { UserRole } from '@prisma/client';
 import { z } from 'zod';
+import { parsePagination } from '../utils/helpers';
 
 const announcementSchema = z.object({
   title: z.string().min(1),
@@ -26,6 +27,9 @@ export async function listVendors(req: AuthRequest, res: Response) {
 export async function assignVendorToCanteen(req: AuthRequest, res: Response) {
   const { vendorId, canteenId } = req.body;
   if (!vendorId || !canteenId) return res.status(400).json({ error: 'vendorId and canteenId required' });
+
+  const vendor = await prisma.user.findUnique({ where: { id: vendorId }, select: { role: true } });
+  if (vendor?.role !== UserRole.VENDOR) return res.status(400).json({ error: 'User is not a vendor' });
 
   const canteen = await prisma.canteen.update({
     where: { id: canteenId },
@@ -138,8 +142,8 @@ export async function markSettlementPaid(req: AuthRequest, res: Response) {
 // ─── User management ──────────────────────────────────────────────────────────
 
 export async function listUsers(req: AuthRequest, res: Response) {
-  const { role, page = '1', limit = '50' } = req.query as Record<string, string>;
-  const skip = (Number(page) - 1) * Number(limit);
+  const { role, page, limit } = req.query as Record<string, string>;
+  const { skip, take } = parsePagination(page, limit || '50');
 
   const where = role ? { role: role as UserRole } : {};
   const [users, total] = await Promise.all([
@@ -148,7 +152,7 @@ export async function listUsers(req: AuthRequest, res: Response) {
       select: { id: true, name: true, email: true, role: true, department: true, campus: true, createdAt: true },
       orderBy: { createdAt: 'desc' },
       skip,
-      take: Number(limit),
+      take,
     }),
     prisma.user.count({ where }),
   ]);

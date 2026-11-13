@@ -160,7 +160,7 @@ async function bootstrap() {
     await redis.ping();
     logger.info('Redis connected');
   } catch (err) {
-    logger.warn('Redis unavailable — payment status polling disabled, continuing without it');
+    logger.warn('Redis unavailable — running without the slot availability cache');
   }
 
   // Start background jobs
@@ -171,6 +171,12 @@ async function bootstrap() {
     logger.info(`Server running on http://localhost:${PORT}`);
   });
 }
+
+// Last line of defence for stray promise rejections (cron jobs, fire-and-forget
+// work). Route handlers are already covered by utils/router.
+process.on('unhandledRejection', (reason) => {
+  logger.error('Unhandled promise rejection', { reason });
+});
 
 bootstrap();
 

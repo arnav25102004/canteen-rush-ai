@@ -32,7 +32,7 @@ export async function listCanteens(req: Request, res: Response) {
       ...(campus ? { campus: { contains: campus as string, mode: 'insensitive' } } : {}),
     },
     include: {
-      vendor: { select: { name: true, email: true } },
+      vendor: { select: { name: true } },
       _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
     },
     orderBy: { name: 'asc' },
@@ -45,7 +45,7 @@ export async function getCanteen(req: Request, res: Response) {
   const canteen = await prisma.canteen.findUnique({
     where: { id },
     include: {
-      vendor: { select: { name: true, email: true } },
+      vendor: { select: { name: true } },
       _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
     },
   });
@@ -86,15 +86,30 @@ export async function updateCanteen(req: AuthRequest, res: Response) {
   return res.json({ canteen });
 }
 
-export async function updateMyCanteenUpi(req: AuthRequest, res: Response) {
+// Fields a vendor may change on their own canteen. Everything else
+// (institution, Razorpay account) is admin-only.
+const myCanteenSchema = canteenSchema
+  .pick({
+    name: true, description: true, location: true, imageUrl: true, bannerUrl: true,
+    openingTime: true, closingTime: true, contactPhone: true, avgPrepTime: true,
+    vendorUpiId: true, vendorUpiName: true, isActive: true,
+  })
+  .partial();
+
+export async function getMyCanteen(req: AuthRequest, res: Response) {
+  const canteen = await prisma.canteen.findFirst({ where: { vendorId: req.user!.id } });
+  if (!canteen) return res.status(404).json({ error: 'No canteen assigned to this vendor' });
+  return res.json({ canteen });
+}
+
+export async function updateMyCanteen(req: AuthRequest, res: Response) {
   const canteen = await prisma.canteen.findFirst({ where: { vendorId: req.user!.id } });
   if (!canteen) return res.status(404).json({ error: 'No canteen assigned to this vendor' });
 
-  const { vendorUpiId, vendorUpiName } = req.body;
-  const updated = await prisma.canteen.update({
-    where: { id: canteen.id },
-    data: { vendorUpiId, vendorUpiName },
-  });
+  const v = validateBody(myCanteenSchema, req.body, res);
+  if (!v.success) return;
+
+  const updated = await prisma.canteen.update({ where: { id: canteen.id }, data: v.data });
   return res.json({ canteen: updated });
 }
 

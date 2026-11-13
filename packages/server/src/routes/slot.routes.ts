@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import { generateSlots, updateSlot, toggleSlot } from '../controllers/slot.controller';
 import { authenticate, requireVendor } from '../middleware/auth';
 

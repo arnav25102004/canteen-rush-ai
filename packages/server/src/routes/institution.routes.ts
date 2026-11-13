@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import { listInstitutions, getInstitutionCanteens, getInstitutionBySlug } from '../controllers/institution.controller';
 
 const router = Router();

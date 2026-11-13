@@ -1,4 +1,4 @@
-import { Router } from 'express';
+import { Router } from '../utils/router';
 import { vendorSummary, vendorPopularItems, vendorPeakHours, adminOverview, adminCanteenRevenue } from '../controllers/analytics.controller';
 import { authenticate, requireVendor, requireAdmin } from '../middleware/auth';
 

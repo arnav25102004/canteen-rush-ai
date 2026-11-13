@@ -67,3 +67,9 @@ describe('generateTimeSlots', () => {
     ]);
   });
 });
+
+describe('parsePagination with junk input', () => {
+  it('falls back to defaults instead of NaN (which crashed Prisma)', () => {
+    expect(parsePagination('abc', 'xyz')).toMatchObject({ page: 1, limit: 20, skip: 0 });
+  });
+});
