@@ -15,7 +15,7 @@ const placeOrderSchema = z.object({
   items: z.array(z.object({
     menuItemId: z.string().uuid(),
     quantity: z.number().int().positive().max(50),
-    customizations: z.record(z.any()).optional(),
+    customizations: z.record(z.string(), z.any()).optional(),
     notes: z.string().max(200).optional(),
   })).min(1).max(30),
   specialInstructions: z.string().max(500).optional(),

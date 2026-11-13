@@ -12,7 +12,8 @@
     "studio": "prisma studio",
     "generate": "prisma generate",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "verify-existing-users": "ts-node --project tsconfig.seed.json prisma/mark-existing-users-verified.ts"
   },
   "dependencies": {
     "@prisma/client": "^5.10.2",
@@ -23,18 +24,18 @@
     "esbuild": "^0.28.0",
     "express": "^4.18.3",
     "express-rate-limit": "^7.2.0",
-    "firebase-admin": "^12.0.0",
+    "firebase-admin": "^14.5.1",
     "helmet": "^7.1.0",
     "ioredis": "^5.3.2",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.0",
     "multer": "^2.5.0",
-    "node-cron": "^3.0.3",
+    "node-cron": "^4.6.0",
     "qrcode": "^1.5.3",
     "razorpay": "^2.9.2",
     "socket.io": "^4.7.5",
     "winston": "^3.19.0",
-    "zod": "^3.22.4"
+    "zod": "^4.6.7"
   },
   "prisma": {
     "seed": "ts-node --project tsconfig.seed.json --require dotenv/config prisma/seed.ts"
@@ -56,5 +57,11 @@
     "ts-node-dev": "^2.0.0",
     "typescript": "^5.4.3",
     "vitest": "^4.1.10"
+  },
+  "engines": {
+    "node": ">=22"
+  },
+  "overrides": {
+    "qs": "^6.17.1"
   }
 }
