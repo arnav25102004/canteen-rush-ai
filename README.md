@@ -5,10 +5,12 @@ Pre-order system for university canteens. Students order from the mobile app, ve
 | Part | Path | Stack | Port |
 |------|------|-------|------|
 | API server | `packages/server` | Express, Prisma (Postgres), Socket.IO, Firebase Admin, optional Redis | 3001 |
-| Vendor & admin web | `apps/web` | Next.js 14, Firebase Auth | 3000 |
+| Vendor & admin web | `apps/web` | Next.js 16, React 19, Firebase Auth | 3000 |
 | Student app | `apps/mobile` | Expo / React Native, Firebase Auth | 8085 (Metro) |
 
 ## Run locally
+
+Requires Node 22+ (the server's firebase-admin 14 needs it).
 
 1. **Databases**: `docker compose up -d` starts Postgres (5432) and Redis (6379). Redis is optional.
 2. **Server**
@@ -38,6 +40,7 @@ TEST_DATABASE_URL=postgresql://... npm test
 - Everyone signs up with their institution email, and must verify it before logging in.
 - New accounts are `STUDENT`. Emails listed in `ADMIN_EMAILS` become `ADMIN`.
 - Admins promote vendors from **Admin → Users**, then assign them to a canteen from **Admin → Vendors**.
+- One-time rollout: accounts created before email verification was required can be marked verified with `npm run verify-existing-users -- --before=YYYY-MM-DD`. It is a dry run unless you add `--apply`.
 
 ## Payments
 
