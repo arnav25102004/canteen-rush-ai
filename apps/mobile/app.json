@@ -7,11 +7,6 @@
     "icon": "./assets/icon.png",
     "scheme": "campuskhana",
     "userInterfaceStyle": "light",
-    "splash": {
-      "image": "./assets/splash.png",
-      "resizeMode": "contain",
-      "backgroundColor": "#F97316"
-    },
     "ios": {
       "supportsTablet": true,
       "bundleIdentifier": "dev.campuskhana.app"
@@ -35,14 +30,26 @@
       "expo-router",
       [
         "expo-camera",
-        { "cameraPermission": "Allow Campus Khana to use your camera to scan QR codes at the canteen counter." }
+        {
+          "cameraPermission": "Allow Campus Khana to use your camera to scan QR codes at the canteen counter."
+        }
       ],
       [
         "expo-build-properties",
         {
           "android": {
-            "networkSecurityConfig": "./network_security_config.xml"
+            "usesCleartextTraffic": false
           }
+        }
+      ],
+      "expo-status-bar",
+      [
+        "expo-splash-screen",
+        {
+          "image": "./assets/splash.png",
+          "resizeMode": "contain",
+          "backgroundColor": "#F97316",
+          "imageWidth": 200
         }
       ]
     ],
