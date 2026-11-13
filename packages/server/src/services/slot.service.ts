@@ -1,5 +1,5 @@
 import { prisma } from '../config/database';
-import { redis, KEYS } from '../config/redis';
+import { cacheGet, cacheSet, slotCacheKeys } from '../config/redis';
 import { generateTimeSlots } from '../utils/helpers';
 import { UserRole } from '@prisma/client';
 
@@ -19,9 +19,10 @@ interface SlotAvailability {
 
 export async function getSlotAvailability(slotId: string, userRole?: UserRole): Promise<SlotAvailability | null> {
   const isFaculty = userRole === UserRole.FACULTY || userRole === UserRole.ADMIN;
-  const cacheKey = isFaculty ? `${KEYS.slotAvailability(slotId)}:faculty` : KEYS.slotAvailability(slotId);
+  const [studentKey, facultyKey] = slotCacheKeys(slotId);
+  const cacheKey = isFaculty ? facultyKey : studentKey;
 
-  const cached = await redis.get(cacheKey);
+  const cached = await cacheGet(cacheKey);
   if (cached) return JSON.parse(cached);
 
   const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
@@ -51,7 +52,7 @@ export async function getSlotAvailability(slotId: string, userRole?: UserRole): 
     isOpen: slot.isOpen,
   };
 
-  await redis.setex(cacheKey, 30, JSON.stringify(availability));
+  await cacheSet(cacheKey, 30, JSON.stringify(availability));
   return availability;
 }
 
@@ -83,24 +84,4 @@ export async function generateDefaultSlots(canteenId: string, date: Date) {
   const breakfastSlots = generateTimeSlots(7, 45, 10, 30, 15, 25);
   const lunchSlots = generateTimeSlots(12, 0, 14, 30, 15, 30);
   return generateSlotsForCanteen(canteenId, date, [...breakfastSlots, ...lunchSlots]);
-}
-
-export async function incrementSlotOrders(slotId: string): Promise<boolean> {
-  const slot = await prisma.pickupSlot.findUnique({
-    where: { id: slotId },
-    select: { maxOrders: true, walkInReserved: true, currentOrders: true, isOpen: true },
-  });
-  if (!slot || !slot.isOpen) return false;
-
-  const preOrderCap = slot.maxOrders - slot.walkInReserved;
-  if (slot.currentOrders >= preOrderCap) return false;
-
-  await prisma.pickupSlot.update({ where: { id: slotId }, data: { currentOrders: { increment: 1 } } });
-  await redis.del(KEYS.slotAvailability(slotId));
-  return true;
-}
-
-export async function decrementSlotOrders(slotId: string) {
-  await prisma.pickupSlot.update({ where: { id: slotId }, data: { currentOrders: { decrement: 1 } } });
-  await redis.del(KEYS.slotAvailability(slotId));
 }

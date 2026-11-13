@@ -19,18 +19,25 @@ redis.on('connect', () => {
   console.log('Redis connected');
 });
 
-// Helpers
+// Redis is an optional cache (production on Render runs without it). Every
+// call goes through these helpers, which treat any Redis error as a cache miss.
 export const KEYS = {
   slotAvailability: (slotId: string) => `slot:${slotId}:availability`,
-  orderSeq: (date: string) => `order_seq:${date}`,
-  menuAvailability: (canteenId: string) => `canteen:${canteenId}:menu_avail`,
-  sessionUser: (uid: string) => `session:${uid}`,
 };
 
-export async function incrOrderSeq(date: string): Promise<number> {
-  const key = KEYS.orderSeq(date);
-  const seq = await redis.incr(key);
-  // Expire at end of day (86400 seconds)
-  await redis.expire(key, 86400);
-  return seq;
+export async function cacheGet(key: string): Promise<string | null> {
+  try { return await redis.get(key); } catch { return null; }
+}
+
+export async function cacheSet(key: string, ttlSeconds: number, value: string): Promise<void> {
+  try { await redis.setex(key, ttlSeconds, value); } catch { /* cache is best-effort */ }
+}
+
+export async function cacheDel(...keys: string[]): Promise<void> {
+  try { await redis.del(...keys); } catch { /* cache is best-effort */ }
+}
+
+/** Both cache entries for a slot (student view and faculty view). */
+export function slotCacheKeys(slotId: string): string[] {
+  return [KEYS.slotAvailability(slotId), `${KEYS.slotAvailability(slotId)}:faculty`];
 }

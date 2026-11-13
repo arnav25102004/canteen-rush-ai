@@ -471,3 +471,12 @@ model Announcement {
 
   @@map("announcements")
 }
+
+// Daily order-number counter (CC-YYYYMMDD-NNNN). Lives in Postgres so order
+// numbers stay unique without Redis.
+model OrderCounter {
+  date String @id // YYYYMMDD, IST
+  seq  Int    @default(0)
+
+  @@map("order_counters")
+}

@@ -28,6 +28,24 @@ export function parsePagination(page: string = '1', limit: string = '20') {
   return { skip: (p - 1) * l, take: l, page: p, limit: l };
 }
 
+const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
+
+/** Calendar date in IST as YYYYMMDD — used for daily order numbers. */
+export function istDateKey(at: Date = new Date()): string {
+  return new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10).replace(/-/g, '');
+}
+
+/** Absolute start time of a pickup slot. slot.date is a calendar date; startTime is IST "HH:MM". */
+export function slotStartsAt(slotDate: Date, startTime: string): Date {
+  const { hours, minutes } = parseTimeString(startTime);
+  return new Date(
+    Date.UTC(slotDate.getUTCFullYear(), slotDate.getUTCMonth(), slotDate.getUTCDate(), hours, minutes) - IST_OFFSET_MS
+  );
+}
+
+/** Orders for a slot close this long before it starts. */
+export const SLOT_CUTOFF_MS = 10 * 60 * 1000;
+
 export function buildDateRange(date?: string | Date) {
   const IST_MS = 5.5 * 60 * 60 * 1000; // UTC+5:30
 
