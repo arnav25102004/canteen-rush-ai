@@ -33,6 +33,7 @@ import { globalErrorHandler } from './middleware/errorHandler';
 import { globalLimiter, authLimiter, forgotPasswordLimiter } from './middleware/rateLimit';
 
 // Jobs
+import { FEATURES } from './config/features';
 import { startSlotGenerationJob } from './jobs/slotGeneration.cron';
 import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
 
@@ -164,6 +165,9 @@ async function bootstrap() {
   }
 
   // Start background jobs
+  if (FEATURES.RAZORPAY_ENABLED) {
+    logger.warn('RAZORPAY_ENABLED=true: cancel/no-show refunds are credited to the student wallet and do NOT reverse Razorpay Route transfers or refund the card. Reconcile vendor payouts manually.');
+  }
   startSlotGenerationJob();
   startAutoCancelJob();
 

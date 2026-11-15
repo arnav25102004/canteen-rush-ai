@@ -44,6 +44,11 @@ export function slotStartsAt(slotDate: Date, startTime: string): Date {
   );
 }
 
+/** A paid-at-counter order is a no-show once its slot has ended this long ago. */
+export const NO_SHOW_GRACE_MS = 60 * 60 * 1000;
+export const NO_SHOW_STRIKE_LIMIT = 3;
+export const NO_SHOW_BAN_MS = 7 * 24 * 60 * 60 * 1000;
+
 /** Orders for a slot close this long before it starts. */
 export const SLOT_CUTOFF_MS = 10 * 60 * 1000;
 

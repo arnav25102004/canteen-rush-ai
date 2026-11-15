@@ -41,8 +41,8 @@ export async function createOrder(req: AuthRequest, res: Response) {
     select: { orderStrikes: true, strikeBannedUntil: true },
   });
   if (user?.strikeBannedUntil && user.strikeBannedUntil > new Date()) {
-    const until = user.strikeBannedUntil.toLocaleDateString('en-IN');
-    return res.status(403).json({ error: `Your account is temporarily banned until ${until} due to repeated unverified payment claims.` });
+    const until = user.strikeBannedUntil.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+    return res.status(403).json({ error: `You've been temporarily blocked from ordering after repeated no-shows until ${until}.` });
   }
 
   try {

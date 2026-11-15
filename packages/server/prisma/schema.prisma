@@ -208,6 +208,7 @@ enum OrderStatus {
   READY
   PICKED_UP
   CANCELLED
+  NO_SHOW
 }
 
 enum PaymentMethod {
@@ -321,6 +322,7 @@ model WalletTransaction {
   id           String          @id @default(uuid())
   walletId     String          @map("wallet_id")
   orderId      String?         @unique @map("order_id")
+  razorpayPaymentId String?     @unique @map("razorpay_payment_id") // idempotency key for webhook credits
   type         TransactionType
   amount       Decimal         @db.Decimal(10, 2)
   balanceAfter Decimal         @db.Decimal(10, 2) @map("balance_after")

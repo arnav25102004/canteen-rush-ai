@@ -1,6 +1,6 @@
 import cron from 'node-cron';
 import { prisma } from '../config/database';
-import { cancelOrder } from '../services/order.service';
+import { cancelOrder, sweepNoShowOrders } from '../services/order.service';
 
 export function startAutoCancelJob() {
   let running = false;
@@ -10,6 +10,8 @@ export function startAutoCancelJob() {
     running = true;
     try {
       await cancelUnpaidOnlineOrders();
+      const noShows = await sweepNoShowOrders();
+      if (noShows > 0) console.log(`[Cron] Marked ${noShows} cash orders as no-show`);
     } catch (err: any) {
       console.error('[Cron] Auto-cancel job error:', err.message);
     } finally {
