@@ -6,7 +6,7 @@ import {
 import { useRouter } from 'expo-router';
 import { sendPasswordResetEmail } from 'firebase/auth';
 import { auth } from '../../firebaseConfig';
-import { useAuthStore } from '../../store/authStore';
+import { useAuthStore, EmailNotVerifiedError, resendVerificationEmail } from '../../store/authStore';
 
 export default function LoginScreen() {
   const { login, institution, switchInstitution } = useAuthStore();
@@ -27,10 +27,30 @@ export default function LoginScreen() {
       await login(email.trim().toLowerCase(), password);
       router.replace('/(tabs)/home');
     } catch (e: any) {
-      const msg = e?.response?.data?.error || e?.message || 'Something went wrong';
-      Alert.alert('Error', msg);
+      if (e instanceof EmailNotVerifiedError) {
+        Alert.alert('Verify your email', e.message, [
+          { text: 'OK' },
+          { text: 'Resend email', onPress: handleResend },
+        ]);
+      } else if (e?.code === 'auth/too-many-requests') {
+        Alert.alert('Too many attempts', 'Please wait a while before trying again.');
+      } else {
+        const msg = e?.response?.data?.error || e?.message || 'Something went wrong';
+        Alert.alert('Error', msg);
+      }
     } finally {
       setLoading(false);
+    }
+  }
+
+  async function handleResend() {
+    try {
+      const wait = await resendVerificationEmail(email.trim().toLowerCase(), password);
+      if (wait > 0) Alert.alert('Please wait', `You can resend in ${wait} seconds.`);
+      else Alert.alert('Email sent', 'Check your inbox and spam folder for the verification link.');
+    } catch (e: any) {
+      Alert.alert('Could not resend', e?.code === 'auth/too-many-requests'
+        ? 'Too many requests. Please try again later.' : 'Please try again in a minute.');
     }
   }
 
