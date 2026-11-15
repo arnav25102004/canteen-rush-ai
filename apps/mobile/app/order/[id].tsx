@@ -2,6 +2,7 @@ import { useEffect, useState, useCallback } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, StyleSheet, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams } from 'expo-router';
 import QRCode from 'react-native-qrcode-svg';
+import { usePreventScreenCapture } from 'expo-screen-capture';
 import api from '../../services/api';
 import { getSocket } from '../../services/socket';
 
@@ -16,6 +17,8 @@ const STEP_LABELS: Record<string, string> = {
 };
 
 export default function OrderTrackingScreen() {
+  // Only this screen shows the pickup QR: block screenshots/recording here, not app-wide.
+  usePreventScreenCapture();
   const { id } = useLocalSearchParams<{ id: string }>();
   const [order, setOrder] = useState<any>(null);
   const [qrCode, setQrCode] = useState<string | null>(null);
