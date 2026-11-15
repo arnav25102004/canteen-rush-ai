@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
+import { isAxiosError } from 'axios';
 import RazorpayCheckout from 'react-native-razorpay';
 import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
@@ -83,6 +84,12 @@ export default function CheckoutScreen() {
     } catch (error: any) {
       // Razorpay error code 2 = user dismissed the sheet — do nothing
       if (error?.code === 2) return;
+      if (isAxiosError<{ error?: string }>(error)) {
+        // Server-provided message (e.g. strike ban, closed canteen); generic fallback for network/5xx.
+        const msg = error.response?.status && error.response.status < 500 ? error.response.data?.error : undefined;
+        Alert.alert('Could not place order', msg || 'Something went wrong. Please try again.');
+        return;
+      }
       Alert.alert('Payment Failed', error?.description || error?.message || 'Something went wrong. Please try again.');
     } finally {
       setPlacing(false);

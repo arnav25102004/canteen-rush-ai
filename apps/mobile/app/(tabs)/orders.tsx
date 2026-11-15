@@ -4,8 +4,13 @@ import { useRouter } from 'expo-router';
 import api from '../../services/api';
 
 const STATUS_COLOR: Record<string, string> = {
-  CONFIRMED: '#f59e0b', ACCEPTED: '#3b82f6', PREPARING: '#f97316', READY: '#10b981', PICKED_UP: '#9ca3af', CANCELLED: '#ef4444',
+  CONFIRMED: '#f59e0b', ACCEPTED: '#3b82f6', PREPARING: '#f97316', READY: '#10b981', PICKED_UP: '#9ca3af', CANCELLED: '#ef4444', NO_SHOW: '#9ca3af',
 };
+
+function statusLabel(o: { status: string; cancelReason?: string | null }): string {
+  if (o.status === 'NO_SHOW') return o.cancelReason?.startsWith('Expired') ? 'Expired' : 'No-show';
+  return o.status;
+}
 
 export default function OrdersScreen() {
   const router = useRouter();
@@ -31,8 +36,8 @@ export default function OrdersScreen() {
           <TouchableOpacity style={styles.card} onPress={() => router.push(`/order/${o.id}`)}>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 }}>
               <Text style={styles.orderNum}>{o.orderNumber}</Text>
-              <View style={[styles.statusBadge, { backgroundColor: STATUS_COLOR[o.status] + '20' }]}>
-                <Text style={[styles.statusText, { color: STATUS_COLOR[o.status] }]}>{o.status}</Text>
+              <View style={[styles.statusBadge, { backgroundColor: (STATUS_COLOR[o.status] ?? '#9ca3af') + '20' }]}>
+                <Text style={[styles.statusText, { color: STATUS_COLOR[o.status] ?? '#9ca3af' }]}>{statusLabel(o)}</Text>
               </View>
             </View>
             <Text style={styles.canteenName}>{o.canteen?.name}</Text>

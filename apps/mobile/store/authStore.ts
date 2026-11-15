@@ -1,34 +1,10 @@
 import { create } from 'zustand';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import axios from 'axios';
+import { isAxiosError } from 'axios';
+import api, { registerSessionExpiredHandler } from '../services/api';
+import { resetSocket } from '../services/socket';
 import { auth } from '../firebaseConfig';
 import { signInWithEmailAndPassword, createUserWithEmailAndPassword, sendEmailVerification, signOut, updateProfile } from 'firebase/auth';
-import { CONFIG } from '../config';
-
-// Auto-refresh Firebase token on every request
-axios.interceptors.request.use(async (config) => {
-  const firebaseUser = auth.currentUser;
-  if (firebaseUser) {
-    // getIdToken(false) returns cached token if still valid, refreshes if about to expire
-    const freshToken = await firebaseUser.getIdToken(false);
-    config.headers['Authorization'] = `Bearer ${freshToken}`;
-    await AsyncStorage.setItem('auth_token', freshToken);
-  }
-  return config;
-});
-
-// On 401, clear session so user is sent back to login
-axios.interceptors.response.use(
-  (r) => r,
-  async (error) => {
-    if (error.response?.status === 401) {
-      await AsyncStorage.multiRemove(['user', 'auth_token']);
-      delete axios.defaults.headers.common['Authorization'];
-      useAuthStore.setState({ user: null, token: null });
-    }
-    return Promise.reject(error);
-  },
-);
 
 export interface AppUser {
   id: string;
@@ -52,7 +28,6 @@ export interface Institution {
 
 interface AuthStore {
   user: AppUser | null;
-  token: string | null;
   institution: Institution | null;
   isLoaded: boolean;
   loadFromStorage: () => Promise<void>;
@@ -63,21 +38,24 @@ interface AuthStore {
   logout: () => Promise<void>;
 }
 
-function applyToken(token: string | null) {
-  if (token) {
-    axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-  } else {
-    delete axios.defaults.headers.common['Authorization'];
-  }
+interface ApiUser {
+  id: string;
+  name: string;
+  email: string;
+  role: string;
+  vendorCanteen?: { id: string } | null;
+  campus?: string;
+  dietPreference?: string;
+  institutionId?: string;
 }
 
-function mapUser(dataUser: any): AppUser {
+export function mapUser(dataUser: ApiUser): AppUser {
   return {
     id: dataUser.id,
     name: dataUser.name,
     email: dataUser.email,
     role: dataUser.role,
-    canteenId: dataUser.vendorCanteen?.id,
+    canteenId: dataUser.vendorCanteen?.id ?? undefined,
     campus: dataUser.campus,
     dietPreference: dataUser.dietPreference,
     institutionId: dataUser.institutionId,
@@ -86,20 +64,17 @@ function mapUser(dataUser: any): AppUser {
 
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
-  token: null,
   institution: null,
   isLoaded: false,
 
   loadFromStorage: async () => {
     try {
-      const [rawUser, rawToken, rawInst] = await AsyncStorage.multiGet(['user', 'auth_token', 'institution']);
+      const [rawUser, rawInst] = await AsyncStorage.multiGet(['user', 'institution']);
       const user = rawUser[1] ? (JSON.parse(rawUser[1]) as AppUser) : null;
-      const token = rawToken[1] ?? null;
       const institution = rawInst[1] ? (JSON.parse(rawInst[1]) as Institution) : null;
-      applyToken(token);
-      set({ user, token, institution, isLoaded: true });
+      set({ user, institution, isLoaded: true });
     } catch {
-      set({ user: null, token: null, institution: null, isLoaded: true });
+      set({ user: null, institution: null, isLoaded: true });
     }
   },
 
@@ -122,22 +97,21 @@ export const useAuthStore = create<AuthStore>((set) => ({
       throw new Error('Please verify your email first. We sent a new verification link to your inbox.');
     }
     const token = await userCredential.user.getIdToken();
-    applyToken(token);
 
     try {
-      const { data } = await axios.get(`${CONFIG.API_URL}/auth/me`);
+      const { data } = await api.get<{ user: ApiUser }>('/auth/me');
       const user = mapUser(data.user);
-      await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
-      set({ user, token });
-    } catch (error: any) {
-      if (error.response?.status === 404 || error.response?.status === 401) {
-        const { data } = await axios.post(`${CONFIG.API_URL}/auth/register`, {
+      await AsyncStorage.setItem('user', JSON.stringify(user));
+      set({ user });
+    } catch (error: unknown) {
+      if (isAxiosError(error) && (error.response?.status === 404 || error.response?.status === 401)) {
+        const { data } = await api.post<{ user: ApiUser }>('/auth/register', {
           firebaseToken: token,
           name: userCredential.user.displayName || email.split('@')[0],
         });
         const user = mapUser(data.user);
-        await AsyncStorage.multiSet([['user', JSON.stringify(user)], ['auth_token', token]]);
-        set({ user, token });
+        await AsyncStorage.setItem('user', JSON.stringify(user));
+        set({ user });
       } else {
         throw error;
       }
@@ -154,9 +128,19 @@ export const useAuthStore = create<AuthStore>((set) => ({
   },
 
   logout: async () => {
-    applyToken(null);
+    resetSocket();
     await signOut(auth).catch(() => {});
     await AsyncStorage.multiRemove(['user', 'auth_token', 'institution']);
-    set({ user: null, token: null, institution: null });
+    set({ user: null, institution: null });
   },
 }));
+
+// 401 that survives a token refresh = dead session. Clear it; the root layout's
+// auth guard then routes to login. Keeps the chosen institution.
+registerSessionExpiredHandler(async () => {
+  if (!useAuthStore.getState().user) return;
+  resetSocket();
+  await signOut(auth).catch(() => {});
+  await AsyncStorage.removeItem('user');
+  useAuthStore.setState({ user: null });
+});

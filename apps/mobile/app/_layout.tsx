@@ -1,12 +1,51 @@
-import { useEffect, useState } from 'react';
-import { View, ActivityIndicator, Text } from 'react-native';
-import { Stack, useRouter, useSegments } from 'expo-router';
+import { useCallback, useEffect, useState } from 'react';
+import { View, ActivityIndicator, Text, TouchableOpacity } from 'react-native';
+import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
 import * as ScreenCapture from 'expo-screen-capture';
 import axios from 'axios';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
-import { useAuthStore } from '../store/authStore';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import NetInfo from '@react-native-community/netinfo';
+import { useAuthStore, mapUser } from '../store/authStore';
+import api from '../services/api';
 import { CONFIG } from '../config';
+
+export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
+  return (
+    <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0B1120', padding: 24 }}>
+      <Text style={{ color: '#F8FAFC', fontSize: 18, fontWeight: '700' }}>Something went wrong</Text>
+      <Text style={{ color: '#94A3B8', fontSize: 13, marginTop: 8, textAlign: 'center' }}>
+        An unexpected error occurred. Please try again.
+      </Text>
+      {__DEV__ && (
+        <Text style={{ color: '#EF4444', fontSize: 11, marginTop: 12 }}>{error.message}</Text>
+      )}
+      <RetryButton label="Try again" onPress={retry} />
+    </View>
+  );
+}
+
+function RetryButton({ label, onPress }: { label: string; onPress: () => void }) {
+  return (
+    <TouchableOpacity
+      onPress={onPress}
+      style={{ marginTop: 20, backgroundColor: '#F97316', borderRadius: 10, paddingHorizontal: 24, paddingVertical: 12 }}>
+      <Text style={{ color: '#fff', fontWeight: '700' }}>{label}</Text>
+    </TouchableOpacity>
+  );
+}
+
+function OfflineBanner() {
+  const [offline, setOffline] = useState(false);
+  useEffect(() => NetInfo.addEventListener((s) => setOffline(s.isConnected === false || s.isInternetReachable === false)), []);
+  if (!offline) return null;
+  return (
+    <View style={{ backgroundColor: '#B91C1C', paddingVertical: 6, paddingHorizontal: 12 }} pointerEvents="none">
+      <Text style={{ color: '#fff', fontSize: 12, textAlign: 'center' }}>You're offline. Some features may not work.</Text>
+    </View>
+  );
+}
 
 export default function RootLayout() {
   const { user, institution, isLoaded, loadFromStorage } = useAuthStore();
@@ -22,15 +61,17 @@ export default function RootLayout() {
     ScreenCapture.preventScreenCaptureAsync().catch(() => {});
   }, []);
 
+  const checkServer = useCallback(async () => {
+    setServerError(false);
+    try {
+      await axios.get(`${CONFIG.API_URL.replace('/api', '')}/api/health`, { timeout: 15000 });
+      setServerReady(true);
+    } catch {
+      setServerError(true);
+    }
+  }, []);
+
   useEffect(() => {
-    const checkServer = async () => {
-      try {
-        await axios.get(`${CONFIG.API_URL.replace('/api', '')}/api/health`, { timeout: 60000 });
-        setServerReady(true);
-      } catch {
-        setServerError(true);
-      }
-    };
     checkServer();
 
     // Restore cached session from AsyncStorage first (instant)
@@ -45,16 +86,11 @@ export default function RootLayout() {
       if (stored.user) return; // Already restored from AsyncStorage — nothing to do
 
       try {
-        const token = await firebaseUser.getIdToken();
-        axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;
-        const { data } = await axios.get(`${CONFIG.API_URL}/auth/me`);
+        const { data } = await api.get('/auth/me');
         if (data.user) {
-          const AsyncStorage = (await import('@react-native-async-storage/async-storage')).default;
-          await AsyncStorage.multiSet([
-            ['user', JSON.stringify(data.user)],
-            ['auth_token', token],
-          ]);
-          useAuthStore.setState({ user: data.user, token, isLoaded: true });
+          const mapped = mapUser(data.user);
+          await AsyncStorage.setItem('user', JSON.stringify(mapped));
+          useAuthStore.setState({ user: mapped, isLoaded: true });
         }
       } catch {
         // Backend unreachable or user not registered — proceed normally, loadFromStorage will handle
@@ -62,7 +98,7 @@ export default function RootLayout() {
     });
 
     return unsubscribe;
-  }, []);
+  }, [checkServer]);
 
   useEffect(() => {
     if (!isLoaded) return;
@@ -83,6 +119,7 @@ export default function RootLayout() {
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0B1120' }}>
         <Text style={{ color: '#EF4444', fontSize: 16 }}>Unable to connect to server</Text>
         <Text style={{ color: '#94A3B8', fontSize: 12, marginTop: 8 }}>Check your internet connection</Text>
+        <RetryButton label="Retry" onPress={checkServer} />
       </View>
     );
   }
@@ -92,13 +129,14 @@ export default function RootLayout() {
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#0B1120' }}>
         <ActivityIndicator size="large" color="#F97316" />
         <Text style={{ color: '#94A3B8', marginTop: 16, fontSize: 14 }}>Starting Campus Khana...</Text>
-        <Text style={{ color: '#475569', marginTop: 8, fontSize: 12 }}>First load may take up to 60 seconds</Text>
+        <Text style={{ color: '#475569', marginTop: 8, fontSize: 12 }}>This may take a few seconds</Text>
       </View>
     );
   }
 
   return (
     <View style={{ flex: 1 }}>
+      <OfflineBanner />
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="select-institution" />
         <Stack.Screen name="(auth)" />
