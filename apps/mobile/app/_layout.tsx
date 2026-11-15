@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import { View, ActivityIndicator, Text, TouchableOpacity } from 'react-native';
 import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
-import * as ScreenCapture from 'expo-screen-capture';
 import axios from 'axios';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
@@ -53,13 +52,6 @@ export default function RootLayout() {
   const segments = useSegments();
   const [serverReady, setServerReady] = useState(false);
   const [serverError, setServerError] = useState(false);
-
-  useEffect(() => {
-    // Order screens show pickup QR codes and payment references — block
-    // screenshots/recording app-wide so those can't be leaked via gallery
-    // or a screen-recording app running alongside Campus Khana.
-    ScreenCapture.preventScreenCaptureAsync().catch(() => {});
-  }, []);
 
   const checkServer = useCallback(async () => {
     setServerError(false);
