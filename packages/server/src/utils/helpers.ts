@@ -105,7 +105,7 @@ export function validateBody<T extends z.ZodTypeAny>(schema: T, body: unknown, r
   { success: true; data: z.infer<T> } | { success: false } {
   const parse = schema.safeParse(body);
   if (!parse.success) {
-    res.status(400).json({ error: parse.error.flatten() });
+    res.status(400).json({ error: z.flattenError(parse.error) });
     return { success: false };
   }
   return { success: true, data: parse.data };

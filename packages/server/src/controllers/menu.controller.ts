@@ -121,7 +121,7 @@ export async function createCategory(req: AuthRequest, res: Response) {
   if (!canteenId) return res.status(403).json({ error: 'No canteen assigned' });
 
   const parse = categorySchema.safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
 
   const category = await prisma.menuCategory.create({
     data: { canteenId, ...parse.data },
@@ -134,7 +134,7 @@ export async function updateCategory(req: AuthRequest, res: Response) {
   const scope = canteenScope(req);
   if (!scope) return res.status(403).json(NO_CANTEEN);
   const parse = categorySchema.partial().safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
 
   const { count } = await prisma.menuCategory.updateMany({ where: { id, ...scope }, data: parse.data });
   if (count === 0) return res.status(404).json(NOT_FOUND);
@@ -157,7 +157,7 @@ export async function createMenuItem(req: AuthRequest, res: Response) {
   if (!canteenId) return res.status(403).json({ error: 'No canteen assigned' });
 
   const parse = menuItemSchema.safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
 
   const { customizations, ...rest } = parse.data;
   const category = await prisma.menuCategory.findFirst({ where: { id: rest.categoryId, canteenId } });
@@ -180,7 +180,7 @@ async function findOwnItem(req: AuthRequest, res: Response) {
 
 export async function updateMenuItem(req: AuthRequest, res: Response) {
   const parse = menuItemSchema.partial().safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
   const existing = await findOwnItem(req, res);
   if (!existing) return;
 
