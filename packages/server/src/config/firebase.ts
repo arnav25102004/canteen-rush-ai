@@ -17,8 +17,13 @@ if (!getApps().length) {
   // Try 2: Environment variables (production)
   if (!initialized && process.env.FIREBASE_PROJECT_ID) {
     try {
+      // Tolerate a value pasted with its surrounding quotes (copied from a .env
+      // or JSON file), which would otherwise make the PEM invalid and silently
+      // reject every login.
       const privateKey = process.env.FIREBASE_PRIVATE_KEY
-        ?.replace(/\\n/g, '\n')
+        ?.trim()
+        .replace(/^(['"])([\s\S]*)\1$/, '$2')
+        .replace(/\\n/g, '\n')
         .replace(/\r/g, '');
       initializeApp({
         credential: cert({
