@@ -7,7 +7,7 @@ import { sendOrderNotification } from './notification.service';
 import { validatePointsRedemption, redeemPoints, refundRedeemedPoints } from './loyalty.service';
 import { FEATURES } from '../config/features';
 import { istDateKey, slotStartsAt, SLOT_CUTOFF_MS, NO_SHOW_GRACE_MS, NO_SHOW_STRIKE_LIMIT, NO_SHOW_BAN_MS } from '../utils/helpers';
-import { OrderStatus, PaymentStatus, UserRole } from '@prisma/client';
+import { OrderStatus, PaymentMethod, PaymentStatus, UserRole } from '@prisma/client';
 
 interface PlaceOrderInput {
   userId: string;
@@ -395,6 +395,11 @@ export async function cancelOrder(
   }
 }
 
+// Orders paid at the counter, or fully covered by wallet credit / points
+// (totalAmount 0 -> WALLET). Online (Razorpay) orders are excluded: refunding
+// them would need a card refund, which isn't built while Razorpay is off.
+const NO_SHOW_METHODS: PaymentMethod[] = [PaymentMethod.CASH, PaymentMethod.WALLET];
+
 const NO_SHOW_ELIGIBLE: OrderStatus[] = [
   OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING, OrderStatus.READY,
 ];
@@ -408,7 +413,7 @@ const NO_SHOW_ELIGIBLE: OrderStatus[] = [
 export async function markOrderNoShow(orderId: string): Promise<boolean> {
   const order = await prisma.$transaction(async (tx) => {
     const before = await tx.order.findFirst({
-      where: { id: orderId, paymentMethod: 'CASH', status: { in: NO_SHOW_ELIGIBLE } },
+      where: { id: orderId, paymentMethod: { in: NO_SHOW_METHODS }, status: { in: NO_SHOW_ELIGIBLE } },
       select: { status: true },
     });
     if (!before) return null;
@@ -418,7 +423,7 @@ export async function markOrderNoShow(orderId: string): Promise<boolean> {
 
     const { count } = await tx.order.updateMany({
       // Guard on the exact status we read so a concurrent transition wins cleanly.
-      where: { id: orderId, paymentMethod: 'CASH', status: before.status },
+      where: { id: orderId, paymentMethod: { in: NO_SHOW_METHODS }, status: before.status },
       data: {
         status: OrderStatus.NO_SHOW,
         cancelledAt: new Date(),
@@ -501,12 +506,12 @@ export async function markOrderNoShow(orderId: string): Promise<boolean> {
   return true;
 }
 
-/** Finds cash orders whose slot ended NO_SHOW_GRACE_MS ago or more and expires them. */
+/** Finds counter/wallet-paid orders whose slot ended NO_SHOW_GRACE_MS ago or more and expires them. */
 export async function sweepNoShowOrders(now: Date = new Date()): Promise<number> {
   // Slot dates are IST calendar dates; a day of margin keeps the DB filter cheap and the exact check below.
   const candidates = await prisma.order.findMany({
     where: {
-      paymentMethod: 'CASH',
+      paymentMethod: { in: NO_SHOW_METHODS },
       status: { in: NO_SHOW_ELIGIBLE },
       slot: { date: { lte: new Date(now.getTime() + 24 * 60 * 60 * 1000) } },
     },

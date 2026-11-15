@@ -9,7 +9,7 @@ import type { ScheduledTask } from 'node-cron';
 import { Server as SocketIOServer } from 'socket.io';
 
 import { prisma } from './config/database';
-import { redis } from './config/redis';
+import { redis, redisEnabled } from './config/redis';
 import { setupSocketIO } from './socket/orderSocket';
 import { logger } from './utils/logger';
 import { parseOrigins, originChecker } from './config/cors';
@@ -164,12 +164,16 @@ async function bootstrap() {
     process.exit(1);
   }
 
-  try {
-    await redis.connect();
-    await redis.ping();
-    logger.info('Redis connected');
-  } catch (err) {
-    logger.warn('Redis unavailable — running without the slot availability cache');
+  if (!redisEnabled) {
+    logger.info('REDIS_URL not set — running without the slot availability cache');
+  } else {
+    try {
+      await redis.connect();
+      await redis.ping();
+      logger.info('Redis connected');
+    } catch (err) {
+      logger.warn('Redis unavailable — running without the slot availability cache (will keep retrying)');
+    }
   }
 
   // Start background jobs
@@ -210,7 +214,9 @@ async function shutdown(signal: string, exitCode: number) {
     try { await task.stop(); } catch (err) { logger.warn('Cron stop failed', { err }); }
   }
   try { await prisma.$disconnect(); } catch (err) { logger.warn('Prisma disconnect failed', { err }); }
-  try { await redis.quit(); } catch { redis.disconnect(); }
+  if (redisEnabled) {
+    try { await redis.quit(); } catch { redis.disconnect(); }
+  }
   logger.info('Shutdown complete');
   process.exit(exitCode);
 }

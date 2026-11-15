@@ -136,10 +136,11 @@ describe.skipIf(!url)('webhook late capture and no-show (Postgres)', async () =>
       });
     }
     async function cashOrder(
-      userId: string, slotId: string, walletDebit = 0, status: 'READY' | 'CONFIRMED' = 'READY'
+      userId: string, slotId: string, walletDebit = 0, status: 'READY' | 'CONFIRMED' = 'READY',
+      paymentMethod: 'CASH' | 'WALLET' = 'CASH'
     ) {
       const o = await makeOrder(userId, {
-        paymentMethod: 'CASH', status, razorpayOrderId: null, slotId, totalAmount: 100,
+        paymentMethod, status, razorpayOrderId: null, slotId, totalAmount: paymentMethod === 'WALLET' ? 0 : 100,
       });
       if (walletDebit > 0) {
         const w = await prisma.wallet.findUniqueOrThrow({ where: { userId } });
@@ -173,6 +174,18 @@ describe.skipIf(!url)('webhook late capture and no-show (Postgres)', async () =>
       await sweepNoShowOrders();
       expect((await prisma.order.findUniqueOrThrow({ where: { id: o.id } })).status).toBe('READY');
       expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).orderStrikes).toBe(0);
+    });
+
+    it('expires a fully wallet-paid order too (returns the wallet debit, strikes)', async () => {
+      const userId = await makeUser(80);
+      const slot = await slotEndedAgo(90);
+      const o = await cashOrder(userId, slot.id, 80, 'READY', 'WALLET');
+      expect(await balance(userId)).toBe(0);
+      await sweepNoShowOrders();
+      expect((await prisma.order.findUniqueOrThrow({ where: { id: o.id } })).status).toBe('NO_SHOW');
+      expect(await balance(userId)).toBe(80);
+      expect((await prisma.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } })).currentOrders).toBe(0);
+      expect((await prisma.user.findUniqueOrThrow({ where: { id: userId } })).orderStrikes).toBe(1);
     });
 
     it('expires an order the canteen never finished, but does not strike the student', async () => {

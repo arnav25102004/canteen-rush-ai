@@ -1,5 +1,9 @@
 import Redis from 'ioredis';
 
+// Without REDIS_URL the cache is disabled outright: no connection attempts, no
+// reconnect log spam, every cache call is a miss and callers use the DB.
+export const redisEnabled = !!process.env.REDIS_URL?.trim();
+
 export const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
   maxRetriesPerRequest: 1, // queued commands fail fast while disconnected (callers fall back to the DB)
   enableReadyCheck: false,
@@ -27,14 +31,17 @@ export const KEYS = {
 };
 
 export async function cacheGet(key: string): Promise<string | null> {
+  if (!redisEnabled) return null;
   try { return await redis.get(key); } catch { return null; }
 }
 
 export async function cacheSet(key: string, ttlSeconds: number, value: string): Promise<void> {
+  if (!redisEnabled) return;
   try { await redis.setex(key, ttlSeconds, value); } catch { /* cache is best-effort */ }
 }
 
 export async function cacheDel(...keys: string[]): Promise<void> {
+  if (!redisEnabled) return;
   try { await redis.del(...keys); } catch { /* cache is best-effort */ }
 }
 
