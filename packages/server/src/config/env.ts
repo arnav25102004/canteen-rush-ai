@@ -12,10 +12,9 @@ const productionKeys = [
   'FIREBASE_PROJECT_ID',
   'FIREBASE_CLIENT_EMAIL',
   'FIREBASE_PRIVATE_KEY',
-  'CLOUDINARY_CLOUD_NAME',
-  'CLOUDINARY_API_KEY',
-  'CLOUDINARY_API_SECRET',
 ] as const;
+// Optional (menu photo uploads). Setting only some of them is a mistake, so that is rejected.
+const cloudinaryKeys = ['CLOUDINARY_CLOUD_NAME', 'CLOUDINARY_API_KEY', 'CLOUDINARY_API_SECRET'] as const;
 const razorpayKeys = ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOOK_SECRET'] as const;
 
 /**
@@ -34,6 +33,10 @@ export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
     const present = (k: string) => !!env[k]?.trim();
     for (const k of productionKeys) if (!present(k)) problems.push(`${k} (missing)`);
     if (!present('CORS_ORIGINS') && !present('WEB_URL')) problems.push('CORS_ORIGINS or WEB_URL (missing)');
+    const cloudinarySet = cloudinaryKeys.filter(present);
+    if (cloudinarySet.length > 0 && cloudinarySet.length < cloudinaryKeys.length) {
+      for (const k of cloudinaryKeys) if (!present(k)) problems.push(`${k} (missing; set all three Cloudinary keys or none)`);
+    }
     if (env.RAZORPAY_ENABLED === 'true') {
       for (const k of razorpayKeys) if (!present(k)) problems.push(`${k} (missing, required when RAZORPAY_ENABLED=true)`);
     }

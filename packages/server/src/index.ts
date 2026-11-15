@@ -10,6 +10,7 @@ import { Server as SocketIOServer } from 'socket.io';
 
 import { prisma } from './config/database';
 import { redis, redisEnabled } from './config/redis';
+import { cloudinaryConfigured } from './config/cloudinary';
 import { setupSocketIO } from './socket/orderSocket';
 import { logger } from './utils/logger';
 import { parseOrigins, originChecker } from './config/cors';
@@ -164,6 +165,9 @@ async function bootstrap() {
     process.exit(1);
   }
 
+  if (!cloudinaryConfigured) {
+    logger.warn('Cloudinary not configured — menu photo uploads are disabled (endpoint returns 503)');
+  }
   if (!redisEnabled) {
     logger.info('REDIS_URL not set — running without the slot availability cache');
   } else {

@@ -9,6 +9,13 @@ cloudinary.config({
 
 export { cloudinary };
 
+/** Menu photo uploads are optional: without all three keys the upload endpoint answers 503. */
+export const cloudinaryConfigured = !!(
+  process.env.CLOUDINARY_CLOUD_NAME?.trim() &&
+  process.env.CLOUDINARY_API_KEY?.trim() &&
+  process.env.CLOUDINARY_API_SECRET?.trim()
+);
+
 export async function uploadImage(
   filePath: string,
   folder: string = 'campus-khana'
