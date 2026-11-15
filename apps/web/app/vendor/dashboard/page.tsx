@@ -3,6 +3,7 @@ import { useEffect, useState, useCallback, useRef } from 'react';
 import Sidebar from '../../../components/shared/Sidebar';
 import api from '../../../lib/api';
 import { auth } from '../../../lib/firebase';
+import axios from 'axios';
 import { io, Socket } from 'socket.io-client';
 
 interface OrderItem { quantity: number; menuItem: { name: string } }
@@ -34,6 +35,7 @@ const STATUS_STYLE: Record<string, { bg: string; text: string; dot: string; labe
   PREPARING: { bg: '#ffedd5', text: '#7c2d12', dot: '#f97316', label: 'Preparing'  },
   READY:     { bg: '#dcfce7', text: '#14532d', dot: '#22c55e', label: 'Ready!'     },
   PENDING:   { bg: '#f3e8ff', text: '#581c87', dot: '#a855f7', label: 'Pending'    },
+  NO_SHOW:   { bg: '#e2e8f0', text: '#475569', dot: '#94a3b8', label: 'No-show'    },
 };
 
 function timeAgo(iso: string) {
@@ -47,6 +49,7 @@ export default function VendorDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
   const [socket, setSocket] = useState<Socket | null>(null);
+  const [loadError, setLoadError] = useState('');
   const loadingRef = useRef(false);
 
   const loadData = useCallback(async () => {
@@ -54,11 +57,15 @@ export default function VendorDashboard() {
     loadingRef.current = true;
     try {
       const [statsRes, ordersRes] = await Promise.all([
-        api.get('/analytics/vendor/summary?period=today').catch(() => ({ data: null })),
-        api.get('/orders/vendor/list').catch(() => ({ data: { orders: [] } })),
+        api.get('/analytics/vendor/summary?period=today'),
+        api.get('/orders/vendor/list'),
       ]);
       if (statsRes.data) setStats(statsRes.data);
       if (ordersRes.data.orders) setOrders(ordersRes.data.orders.slice(0, 40));
+      setLoadError('');
+    } catch (e) {
+      const msg = axios.isAxiosError(e) ? (e.response?.data as { error?: unknown } | undefined)?.error : undefined;
+      setLoadError(typeof msg === 'string' ? msg : 'Could not load orders. Check your connection and retry.');
     } finally {
       loadingRef.current = false;
     }
@@ -68,13 +75,17 @@ export default function VendorDashboard() {
     loadData();
     let s: ReturnType<typeof io> | undefined;
     let cancelled = false;
+    let onConnect: (() => void) | undefined;
+    let onOrderEvent: (() => void) | undefined;
 
     // canteen_id is saved at login; older sessions fetch it once from /auth/me
     (async () => {
       let canteenId = localStorage.getItem('canteen_id');
       if (!canteenId) {
-        const { data } = await api.get('/auth/me').catch(() => ({ data: null as any }));
-        canteenId = data?.user?.vendorCanteen?.id ?? null;
+        try {
+          const { data } = await api.get('/auth/me');
+          canteenId = data?.user?.vendorCanteen?.id ?? null;
+        } catch { canteenId = null; }
         if (canteenId) localStorage.setItem('canteen_id', canteenId);
       }
       if (!canteenId || cancelled) return;
@@ -86,19 +97,32 @@ export default function VendorDashboard() {
         reconnectionAttempts: 10,
         // Fetched per (re)connect: the server rejects unauthenticated handshakes
         // and only lets the assigned vendor join this canteen's room.
+        // Same token source as lib/api.ts: live Firebase user first, stored token as fallback.
         auth: (cb) => {
+          const stored = () => localStorage.getItem('auth_token');
           auth.authStateReady()
-            .then(() => auth.currentUser?.getIdToken() ?? null)
+            .then(() => auth.currentUser?.getIdToken() ?? stored())
             .then((token) => cb({ token }))
-            .catch(() => cb({ token: null }));
+            .catch(() => cb({ token: stored() }));
         },
       });
-      s.emit('join:canteen', { canteenId });
-      s.on('order:new', () => loadData());
-      s.on('order:status_update', () => loadData());
-      setSocket(s);
+      const sock = s;
+      // Re-join the room on every (re)connect; rooms are lost when the socket drops.
+      onConnect = () => { sock.emit('join:canteen', { canteenId }); loadData(); };
+      onOrderEvent = () => { loadData(); };
+      sock.on('connect', onConnect);
+      sock.on('order:new', onOrderEvent);
+      sock.on('order:status_update', onOrderEvent);
+      setSocket(sock);
     })();
-    return () => { cancelled = true; s?.disconnect(); };
+    return () => {
+      cancelled = true;
+      if (s) {
+        if (onConnect) s.off('connect', onConnect);
+        if (onOrderEvent) { s.off('order:new', onOrderEvent); s.off('order:status_update', onOrderEvent); }
+        s.disconnect();
+      }
+    };
   }, [loadData]);
 
   async function markStatus(orderId: string, next: string) {
@@ -132,6 +156,13 @@ export default function VendorDashboard() {
             ↻ Refresh
           </button>
         </div>
+
+        {loadError && (
+          <div style={{ background: '#450a0a', border: '1px solid #991b1b', color: '#fecaca', borderRadius: 10, padding: '12px 16px', marginBottom: 20, fontSize: 14, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <span>{loadError}</span>
+            <button onClick={loadData} style={{ background: '#991b1b', color: '#fff', border: 'none', borderRadius: 8, padding: '6px 14px', cursor: 'pointer', fontSize: 13 }}>Retry</button>
+          </div>
+        )}
 
         {/* Stats */}
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 16, marginBottom: 32 }}>

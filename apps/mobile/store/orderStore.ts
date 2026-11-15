@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import api from '../services/api';
 
-export type OrderStatus = 'CONFIRMED' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'PICKED_UP' | 'CANCELLED';
+export type OrderStatus = 'CONFIRMED' | 'ACCEPTED' | 'PREPARING' | 'READY' | 'PICKED_UP' | 'CANCELLED' | 'NO_SHOW';
 
 export interface OrderItem {
   menuItemId: string;

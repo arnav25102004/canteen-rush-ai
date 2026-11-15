@@ -3,8 +3,15 @@ import crypto from 'crypto';
 import { prisma } from '../config/database';
 import { sendOrderNotification } from '../services/notification.service';
 import { generatePickupCode } from '../utils/helpers';
-import { cancelOrder } from '../services/order.service';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
+
+interface RazorpayPaymentEntity {
+  id: string;
+  order_id: string;
+  amount: number;
+  currency: string;
+  transfer_id?: string;
+}
 
 interface RawRequest extends Request {
   rawBody?: Buffer;
@@ -41,15 +48,18 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
 
   const { event, payload } = req.body as {
     event: string;
-    payload: { payment: { entity: Record<string, string> } };
+    payload: { payment: { entity: RazorpayPaymentEntity } };
   };
 
   console.log(`[Webhook] Razorpay event: ${event}`);
 
+  const entity = payload?.payment?.entity;
+  if (!entity) return res.json({ status: 'ok' });
+
   if (event === 'payment.captured') {
-    const razorpayOrderId = payload.payment.entity.order_id;
-    const razorpayPaymentId = payload.payment.entity.id;
-    const transferId = payload.payment.entity.transfer_id || null;
+    const razorpayOrderId = entity.order_id;
+    const razorpayPaymentId = entity.id;
+    const transferId = entity.transfer_id || null;
 
     const order = await prisma.order.findUnique({
       where: { razorpayOrderId },
@@ -59,35 +69,21 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
       },
     });
 
+    // 200, not 404: Razorpay retries non-2xx responses for days.
     if (!order) {
-      console.warn(`[Webhook] Order not found for razorpayOrderId: ${razorpayOrderId}`);
-      return res.status(404).json({ error: 'Order not found' });
+      console.warn(`[Webhook] Order not found for razorpayOrderId: ${razorpayOrderId} (payment ${razorpayPaymentId})`);
+      return res.json({ status: 'ok' });
     }
 
-    // Money arrived for an order that was already cancelled (e.g. the student
-    // paid after the 10-minute timeout). Credit the wallet once, never resurrect it.
-    if (order.status === OrderStatus.CANCELLED) {
-      await prisma.$transaction(async (tx) => {
-        const { count } = await tx.order.updateMany({
-          where: { id: order.id, paymentStatus: { notIn: ['PAID', 'REFUNDED'] } },
-          data: { paymentStatus: 'REFUNDED', razorpayPaymentId },
-        });
-        if (count === 0 || !order.userId) return;
-        const wallet = await tx.wallet.upsert({
-          where: { userId: order.userId },
-          update: { balance: { increment: order.totalAmount } },
-          create: { userId: order.userId, balance: order.totalAmount },
-        });
-        await tx.walletTransaction.create({
-          data: {
-            walletId: wallet.id,
-            type: 'REFUND',
-            amount: order.totalAmount,
-            balanceAfter: wallet.balance,
-            description: `Late payment refunded for cancelled Order #${order.orderNumber}`,
-          },
-        });
-      });
+    const expectedPaise = Math.round(Number(order.totalAmount) * 100);
+    const amountOk = entity.amount === expectedPaise && entity.currency === 'INR';
+
+    if (!amountOk) {
+      console.error(
+        `[Webhook] Amount mismatch for order ${order.id}: expected ${expectedPaise} INR paise, ` +
+        `captured ${entity.amount} ${entity.currency} (payment ${razorpayPaymentId}). Not confirming; crediting wallet.`
+      );
+      await creditCapturedPayment(order, razorpayPaymentId, entity.amount, 'Payment with unexpected amount');
       return res.json({ status: 'ok' });
     }
 
@@ -105,7 +101,21 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
         paymentVerifiedAt: new Date(),
       },
     });
-    if (count === 0) return res.json({ status: 'ok' });
+
+    if (count === 0) {
+      // Not awaiting payment any more. If this very payment already confirmed it
+      // (duplicate delivery) there is nothing to do; otherwise the money arrived
+      // for a cancelled/expired order and goes to the wallet, exactly once.
+      const current = await prisma.order.findUnique({
+        where: { id: order.id },
+        select: { razorpayPaymentId: true, paymentStatus: true },
+      });
+      const confirmedByThisPayment = current?.razorpayPaymentId === razorpayPaymentId && current.paymentStatus === 'PAID';
+      if (!confirmedByThisPayment) {
+        await creditCapturedPayment(order, razorpayPaymentId, entity.amount, 'Late payment');
+      }
+      return res.json({ status: 'ok' });
+    }
 
     const updatedOrder = { ...order, status: OrderStatus.CONFIRMED, paymentStatus: 'PAID', pickupCode };
 
@@ -122,19 +132,56 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
   }
 
   if (event === 'payment.failed') {
-    const razorpayOrderId = payload.payment.entity.order_id;
-    const order = await prisma.order.findUnique({
-      where: { razorpayOrderId },
-      select: { id: true, orderNumber: true, status: true },
-    });
-
-    if (order && order.status === OrderStatus.PENDING) {
-      // cancelOrder also returns any wallet credit / points used on this order.
-      await cancelOrder(order.id, 'system', 'Razorpay payment failed', req.io, { paymentStatus: 'FAILED' })
-        .catch((err) => console.warn(`[Webhook] Cancel after failed payment skipped: ${err.message}`));
-      console.log(`[Webhook] Payment failed for order ${order.orderNumber}`);
-    }
+    // Razorpay lets the student retry on the same order, so a failed attempt must
+    // not cancel it; the auto-cancel cron expires orders that never get paid.
+    console.log(`[Webhook] Payment failed for razorpay order ${entity.order_id} (payment ${entity.id})`);
   }
 
   return res.json({ status: 'ok' });
+}
+
+/**
+ * Credits captured money to the student's wallet exactly once per Razorpay
+ * payment id. The unique wallet_transactions.razorpay_payment_id column is the
+ * guard: a concurrent duplicate hits P2002 and its whole transaction (including
+ * the balance increment) rolls back.
+ */
+async function creditCapturedPayment(
+  order: { id: string; userId: string | null; orderNumber: string },
+  razorpayPaymentId: string,
+  amountPaise: number,
+  reason: string
+) {
+  if (!order.userId) {
+    console.error(`[Webhook] Cannot credit payment ${razorpayPaymentId}: order ${order.id} has no user`);
+    return;
+  }
+  const userId = order.userId;
+  const amount = amountPaise / 100;
+  try {
+    await prisma.$transaction(async (tx) => {
+      const wallet = await tx.wallet.upsert({
+        where: { userId },
+        update: { balance: { increment: amount } },
+        create: { userId, balance: amount },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          type: 'REFUND',
+          amount,
+          balanceAfter: wallet.balance,
+          razorpayPaymentId,
+          description: `${reason} credited to wallet for Order #${order.orderNumber}`,
+        },
+      });
+    });
+    console.log(`[Webhook] Credited ${amount} to wallet for payment ${razorpayPaymentId} (order ${order.id})`);
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      console.log(`[Webhook] Payment ${razorpayPaymentId} already credited; ignoring duplicate`);
+      return;
+    }
+    throw err;
+  }
 }

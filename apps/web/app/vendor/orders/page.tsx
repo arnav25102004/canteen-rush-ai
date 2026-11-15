@@ -12,13 +12,14 @@ interface Order {
   slot: { startTime: string; endTime: string } | null;
 }
 
-const STATUSES = ['CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY', 'PICKED_UP'];
+const STATUSES = ['CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY', 'PICKED_UP', 'NO_SHOW'];
 const statusColors: Record<string, string> = {
   CONFIRMED: 'border-yellow-400 bg-yellow-50',
   ACCEPTED:  'border-blue-400 bg-blue-50',
   PREPARING: 'border-orange-400 bg-orange-50',
   READY:     'border-green-400 bg-green-50',
   PICKED_UP: 'border-gray-300 bg-gray-50',
+  NO_SHOW:   'border-slate-300 bg-slate-100 opacity-75',
 };
 const nextAction: Record<string, { label: string; next: string }> = {
   ACCEPTED:  { label: '🍳 Start Preparing', next: 'PREPARING' },

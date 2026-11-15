@@ -1,6 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
 import { logger } from '../utils/logger';
+import { AppError } from '../utils/errors';
 
 // Prisma errors a client can cause with a bad id or duplicate value.
 const PRISMA_STATUS: Record<string, [number, string]> = {
@@ -16,10 +17,17 @@ export function globalErrorHandler(err: any, req: Request, res: Response, _next:
     return res.status(status).json({ error });
   }
 
+  if (err instanceof Prisma.PrismaClientValidationError) {
+    return res.status(400).json({ error: 'Invalid request' });
+  }
+  if (err instanceof AppError) {
+    return res.status(err.status).json({ error: err.message });
+  }
+
   const status = err.status || err.statusCode || 500;
   if (status >= 500) logger.error('Unhandled request error', { path: req.path, err: err.stack || err });
 
   // Never leak internals (SQL, stack details) on 5xx in production.
-  const expose = status < 500 || process.env.NODE_ENV !== 'production';
+  const expose = status < 500 || process.env.NODE_ENV === 'development';
   res.status(status).json({ error: expose ? err.message || 'Error' : 'Internal Server Error' });
 }

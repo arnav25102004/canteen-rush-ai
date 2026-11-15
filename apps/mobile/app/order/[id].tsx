@@ -5,6 +5,7 @@ import QRCode from 'react-native-qrcode-svg';
 import api from '../../services/api';
 import { getSocket } from '../../services/socket';
 
+const TERMINAL = ['PICKED_UP', 'CANCELLED', 'NO_SHOW'];
 const STEPS = ['CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY', 'PICKED_UP'];
 const STEP_LABELS: Record<string, string> = {
   CONFIRMED: 'Confirmed',
@@ -39,9 +40,12 @@ export default function OrderTrackingScreen() {
     if (!id) return;
     const socket = getSocket();
 
-    socket.emit('join:order', { orderId: id });
+    // Re-join on every (re)connect — rooms are lost when the socket drops.
+    const join = () => socket.emit('join:order', { orderId: id });
+    if (socket.connected) join();
+    socket.on('connect', join);
 
-    socket.on('order:status_update', (data: { orderId: string; status: string; paymentStatus?: string; pickupCode?: string }) => {
+    const onStatusUpdate = (data: { orderId: string; status: string; paymentStatus?: string; pickupCode?: string }) => {
       if (data.orderId !== id) return;
       setOrder((prev: any) => prev ? { ...prev, ...data } : prev);
       // If just turned READY, fetch QR code
@@ -50,18 +54,20 @@ export default function OrderTrackingScreen() {
       }
       // Re-fetch full order for any status change to get latest data
       load();
-    });
+    };
+    socket.on('order:status_update', onStatusUpdate);
 
     return () => {
       socket.emit('leave:order', { orderId: id });
-      socket.off('order:status_update');
+      socket.off('connect', join);
+      socket.off('order:status_update', onStatusUpdate);
     };
   }, [id, load]);
 
   // Polling fallback — only active while payment is still processing (webhook can take ~10s)
   useEffect(() => {
     if (!order) return;
-    if (['PICKED_UP', 'CANCELLED'].includes(order.status)) return;
+    if (TERMINAL.includes(order.status)) return;
     // Poll faster (3s) while PENDING, slow down to 10s after payment confirms
     const interval = order.status === 'PENDING' ? 3000 : 10000;
     const timer = setInterval(load, interval);
@@ -86,7 +92,7 @@ export default function OrderTrackingScreen() {
       </View>
 
       {/* Cash payment banner — shown for pay-at-counter orders */}
-      {order.paymentMethod === 'CASH' && !['PICKED_UP', 'CANCELLED'].includes(order.status) && (
+      {order.paymentMethod === 'CASH' && !TERMINAL.includes(order.status) && (
         <View style={styles.cashBanner}>
           <Text style={styles.cashBannerTitle}>💵 Pay at Counter</Text>
           <Text style={styles.cashBannerText}>
@@ -117,8 +123,19 @@ export default function OrderTrackingScreen() {
         </View>
       )}
 
+      {/* No-show / expired state */}
+      {order.status === 'NO_SHOW' && (
+        <View style={styles.noShowBanner}>
+          <Text style={styles.noShowText}>
+            {order.cancelReason?.startsWith('Expired')
+              ? '⌛ Order expired — it was not completed in time.'
+              : '⌛ No-show — this order was not collected.'}
+          </Text>
+        </View>
+      )}
+
       {/* Status Stepper — only shown after payment is confirmed */}
-      {!isPendingPayment && order.status !== 'CANCELLED' && (
+      {!isPendingPayment && !['CANCELLED', 'NO_SHOW'].includes(order.status) && (
         <View style={styles.stepper}>
           {STEPS.filter(s => s !== 'PICKED_UP' || order.status === 'PICKED_UP').map((step, i) => {
             const done = i <= currentStep;
@@ -186,6 +203,8 @@ const styles = StyleSheet.create({
   processingSub: { fontSize: 12, color: '#6b21a8' },
   cancelledBanner: { backgroundColor: '#fef2f2', borderRadius: 14, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#fecaca' },
   cancelledText: { fontSize: 14, color: '#b91c1c', fontWeight: '600' },
+  noShowBanner: { backgroundColor: '#f3f4f6', borderRadius: 14, padding: 16, marginBottom: 16, borderWidth: 1, borderColor: '#e5e7eb' },
+  noShowText: { fontSize: 14, color: '#6b7280', fontWeight: '600' },
   stepper: { flexDirection: 'row', backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 16 },
   stepDot: { width: 24, height: 24, borderRadius: 12, backgroundColor: '#e5e7eb', marginBottom: 6, justifyContent: 'center', alignItems: 'center' },
   stepDotDone: { backgroundColor: '#10b981' },

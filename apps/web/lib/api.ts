@@ -1,4 +1,5 @@
-import axios from 'axios';
+﻿import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
+import { signOut } from 'firebase/auth';
 import { auth } from './firebase';
 
 const api = axios.create({
@@ -21,13 +22,37 @@ api.interceptors.request.use(async (config) => {
   return config;
 });
 
+type RetriableConfig = InternalAxiosRequestConfig & { _retried?: boolean };
+
+function redirectToLogin() {
+  localStorage.clear();
+  window.location.href = '/login';
+}
+
 api.interceptors.response.use(
   (res) => res,
-  (err) => {
-    if (err.response?.status === 401 && typeof window !== 'undefined' && window.location.pathname !== '/login') {
-      localStorage.clear();
-      window.location.href = '/login';
+  async (err: AxiosError) => {
+    const config = err.config as RetriableConfig | undefined;
+    if (err.response?.status !== 401 || typeof window === 'undefined' || !config) {
+      return Promise.reject(err);
     }
+    // Retry once with a force-refreshed Firebase token before giving up.
+    if (!config._retried && auth?.currentUser) {
+      config._retried = true;
+      try {
+        const fresh = await auth.currentUser.getIdToken(true);
+        config.headers.Authorization = `Bearer ${fresh}`;
+        return await api.request(config);
+      } catch (retryErr) {
+        if (!(axios.isAxiosError(retryErr) && retryErr.response?.status === 401)) {
+          return Promise.reject(retryErr);
+        }
+      }
+    }
+    // The login page handles its own 401s (e.g. first-login registration).
+    if (window.location.pathname === '/login') return Promise.reject(err);
+    if (auth) await signOut(auth).catch(() => undefined);
+    redirectToLogin();
     return Promise.reject(err);
   }
 );

@@ -122,7 +122,7 @@ const updateProfileSchema = z.object({
 
 export async function register(req: Request, res: Response) {
   const parse = registerSchema.safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
 
   const { firebaseToken, campus, phone } = parse.data;
 
@@ -150,10 +150,12 @@ export async function register(req: Request, res: Response) {
 
   // Existing row with this email (e.g. seeded): safe to link because the token
   // proves ownership of the inbox. Role is left untouched.
-  const existingByEmail = await prisma.user.findUnique({ where: { email } });
+  const existingByEmail = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: 'insensitive' } },
+  });
   if (existingByEmail) {
     const user = await prisma.user.update({
-      where: { email },
+      where: { id: existingByEmail.id },
       data: { firebaseUid: decoded.uid, institutionId: institution.id },
       include: { wallet: true },
     });
@@ -193,7 +195,7 @@ export async function getMe(req: AuthRequest, res: Response) {
 
 export async function updateMe(req: AuthRequest, res: Response) {
   const parse = updateProfileSchema.safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
 
   const user = await prisma.user.update({
     where: { id: req.user!.id },

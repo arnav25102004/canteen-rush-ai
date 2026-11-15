@@ -245,7 +245,6 @@ apps/mobile/google-services.json
 # Misc
 archive_old_version/
 explanation.md
-apps/mobile/package-lock.json
 
 # OS files
 .DS_Store

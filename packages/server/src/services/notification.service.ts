@@ -19,6 +19,10 @@ const ORDER_STATUS_MESSAGES: Partial<Record<OrderStatus, { title: string; body: 
     title: 'Ready for Pickup! 🎉',
     body: (num) => `Order #${num} is ready! Show your QR code at the counter.`,
   },
+  [OrderStatus.NO_SHOW]: {
+    title: 'Order Not Collected',
+    body: (num) => `Order #${num} was not collected and has expired. Any wallet credit used was returned, and a no-show strike was added.`,
+  },
   [OrderStatus.CANCELLED]: {
     title: 'Order Cancelled',
     body: (num) => `Order #${num} has been cancelled. Refund (if any) will reflect shortly.`,

@@ -40,7 +40,7 @@ export async function assignVendorToCanteen(req: AuthRequest, res: Response) {
 
 export async function createAnnouncement(req: AuthRequest, res: Response) {
   const parse = announcementSchema.safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
 
   const announcement = await prisma.announcement.create({ data: parse.data as any });
   return res.json({ announcement });
@@ -161,8 +161,8 @@ export async function listUsers(req: AuthRequest, res: Response) {
 
 export async function updateUserRole(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const parse = z.object({ role: z.nativeEnum(UserRole) }).safeParse(req.body);
-  if (!parse.success) return res.status(400).json({ error: parse.error.flatten() });
+  const parse = z.object({ role: z.enum(UserRole) }).safeParse(req.body);
+  if (!parse.success) return res.status(400).json({ error: z.flattenError(parse.error) });
 
   if (id === req.user!.id) return res.status(400).json({ error: 'Cannot change your own role' });
 

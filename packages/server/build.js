@@ -8,7 +8,7 @@ function getEntryPoints(dir) {
     const full = path.join(dir, f);
     if (statSync(full).isDirectory()) {
       files.push(...getEntryPoints(full));
-    } else if (f.endsWith('.ts')) {
+    } else if (f.endsWith('.ts') && !f.endsWith('.test.ts')) {
       files.push(full);
     }
   }

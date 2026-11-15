@@ -1,6 +1,13 @@
-import axios from 'axios';
+import axios, { AxiosError, InternalAxiosRequestConfig } from 'axios';
 import { auth } from '../firebaseConfig';
 import { CONFIG } from '../config';
+
+declare module 'axios' {
+  interface AxiosRequestConfig {
+    _authRetried?: boolean;
+    _netRetried?: boolean;
+  }
+}
 
 const api = axios.create({
   baseURL: CONFIG.API_URL,
@@ -8,23 +15,59 @@ const api = axios.create({
   headers: { 'Content-Type': 'application/json' },
 });
 
+// The auth store registers its sign-out here, so this module never imports the
+// store (avoids an api <-> authStore import cycle).
+let onSessionExpired: (() => void | Promise<void>) | null = null;
+export function registerSessionExpiredHandler(fn: () => void | Promise<void>) {
+  onSessionExpired = fn;
+}
+
 api.interceptors.request.use(async (config) => {
   const firebaseUser = auth.currentUser;
   if (firebaseUser) {
-    // Always get a fresh/cached token — Firebase auto-refreshes if near expiry
-    const token = await firebaseUser.getIdToken(false);
+    // Cached token; Firebase refreshes it automatically when near expiry.
+    const token = await firebaseUser.getIdToken();
     config.headers['Authorization'] = `Bearer ${token}`;
   }
   return config;
 });
 
-// Retry once on cold-start timeout or 503 (Render free tier waking up)
+const IDEMPOTENT = ['get', 'head'];
+
 api.interceptors.response.use(
   (response) => response,
-  async (error) => {
-    const config = error.config;
-    if ((error.code === 'ECONNABORTED' || error.response?.status === 503) && !config._retry) {
-      config._retry = true;
+  async (error: AxiosError) => {
+    const config = error.config as InternalAxiosRequestConfig | undefined;
+    if (!config) return Promise.reject(error);
+    const status = error.response?.status;
+
+    // 401: retry once with a force-refreshed token. The retried request runs
+    // through this interceptor again; if it 401s too, the branch below signs out.
+    if (status === 401) {
+      const user = auth.currentUser;
+      if (!config._authRetried && user) {
+        config._authRetried = true;
+        try {
+          config.headers['Authorization'] = `Bearer ${await user.getIdToken(true)}`;
+        } catch {
+          return Promise.reject(error);
+        }
+        return api(config);
+      }
+      // /auth/* 401s are handled by the login flow itself (not registered yet).
+      if (!config.url?.startsWith('/auth/')) await onSessionExpired?.();
+      return Promise.reject(error);
+    }
+
+    // Cold-start timeout / 503: retry once, only for idempotent requests so a
+    // timed-out POST can never create a duplicate order.
+    const method = (config.method ?? 'get').toLowerCase();
+    if (
+      IDEMPOTENT.includes(method) &&
+      !config._netRetried &&
+      (error.code === 'ECONNABORTED' || status === 503)
+    ) {
+      config._netRetried = true;
       await new Promise((resolve) => setTimeout(resolve, 3000));
       return api(config);
     }

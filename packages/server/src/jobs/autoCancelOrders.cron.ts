@@ -1,15 +1,20 @@
-import cron from 'node-cron';
+import cron, { ScheduledTask } from 'node-cron';
 import { prisma } from '../config/database';
-import { cancelOrder } from '../services/order.service';
+import { withAdvisoryLock, LOCK_KEYS } from '../utils/advisoryLock';
+import { cancelOrder, sweepNoShowOrders } from '../services/order.service';
 
-export function startAutoCancelJob() {
+export function startAutoCancelJob(): ScheduledTask {
   let running = false;
 
-  cron.schedule('*/5 * * * *', async () => {
+  const task = cron.schedule('*/5 * * * *', async () => {
     if (running) return;
     running = true;
     try {
-      await cancelUnpaidOnlineOrders();
+      await withAdvisoryLock(LOCK_KEYS.autoCancel, async () => {
+        await cancelUnpaidOnlineOrders();
+        const noShows = await sweepNoShowOrders();
+        if (noShows > 0) console.log(`[Cron] Marked ${noShows} cash orders as no-show`);
+      });
     } catch (err: any) {
       console.error('[Cron] Auto-cancel job error:', err.message);
     } finally {
@@ -18,6 +23,7 @@ export function startAutoCancelJob() {
   });
 
   console.log('[Cron] Auto-cancel job scheduled (every 5 minutes)');
+  return task;
 }
 
 /**

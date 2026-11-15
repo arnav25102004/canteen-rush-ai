@@ -1,3 +1,4 @@
+import { AppError } from '../utils/errors';
 import Razorpay from 'razorpay';
 import { prisma } from '../config/database';
 import { cacheDel, slotCacheKeys } from '../config/redis';
@@ -5,8 +6,8 @@ import { generateQRToken } from './qr.service';
 import { sendOrderNotification } from './notification.service';
 import { validatePointsRedemption, redeemPoints, refundRedeemedPoints } from './loyalty.service';
 import { FEATURES } from '../config/features';
-import { istDateKey, slotStartsAt, SLOT_CUTOFF_MS } from '../utils/helpers';
-import { OrderStatus, PaymentStatus, UserRole } from '@prisma/client';
+import { istDateKey, slotStartsAt, SLOT_CUTOFF_MS, NO_SHOW_GRACE_MS, NO_SHOW_STRIKE_LIMIT, NO_SHOW_BAN_MS } from '../utils/helpers';
+import { OrderStatus, PaymentMethod, PaymentStatus, UserRole } from '@prisma/client';
 
 interface PlaceOrderInput {
   userId: string;
@@ -71,19 +72,19 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   });
 
   if (menuItems.length !== new Set(items.map((i) => i.menuItemId)).size) {
-    throw new Error('One or more items are invalid or belong to a different canteen');
+    throw new AppError(400, 'One or more items are invalid or belong to a different canteen');
   }
 
   const unavailable = menuItems.filter((m) => !m.isAvailable);
   if (unavailable.length > 0) {
-    throw new Error(`${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
+    throw new AppError(400, `${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
   }
 
   const canteen = await prisma.canteen.findUnique({
     where: { id: canteenId },
     select: { id: true, name: true, isActive: true, razorpayAccountId: true },
   });
-  if (!canteen || !canteen.isActive) throw new Error('Canteen not found');
+  if (!canteen || !canteen.isActive) throw new AppError(404, 'Canteen not found');
 
   // Slot rules: same canteen, not past the cutoff, and capacity left for this user's role.
   // Faculty may also use the faculty-reserved seats; students may not.
@@ -91,18 +92,18 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   if (slotId) {
     const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
     if (!slot || slot.canteenId !== canteenId || !slot.isOpen) {
-      throw new Error('This time slot is closed. Please choose another slot.');
+      throw new AppError(400, 'This time slot is closed. Please choose another slot.');
     }
     if (slotStartsAt(slot.date, slot.startTime).getTime() - Date.now() < SLOT_CUTOFF_MS) {
-      throw new Error('Ordering for this slot has closed. Please choose a later slot.');
+      throw new AppError(400, 'Ordering for this slot has closed. Please choose a later slot.');
     }
     const isFaculty = userRole === UserRole.FACULTY || userRole === UserRole.ADMIN;
     slotCap = slot.maxOrders - slot.walkInReserved - (isFaculty ? 0 : slot.facultyReserved);
-    if (slot.currentOrders >= slotCap) throw new Error('This time slot is full. Please choose another slot.');
+    if (slot.currentOrders >= slotCap) throw new AppError(400, 'This time slot is full. Please choose another slot.');
   }
 
   const pointsValidation = await validatePointsRedemption(userId, pointsToRedeem);
-  if (!pointsValidation.valid) throw new Error(pointsValidation.error || 'Invalid points redemption');
+  if (!pointsValidation.valid) throw new AppError(400, pointsValidation.error || 'Invalid points redemption');
   const pointsDiscount = pointsValidation.discountAmount;
 
   // Prices always come from the DB, never the client
@@ -125,7 +126,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     };
   });
 
-  if (pointsDiscount > subtotal) throw new Error('Points discount is larger than the order total');
+  if (pointsDiscount > subtotal) throw new AppError(400, 'Points discount is larger than the order total');
 
   // Wallet credit is applied automatically
   const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
@@ -143,7 +144,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
         where: { id: slotId, isOpen: true, currentOrders: { lt: slotCap } },
         data: { currentOrders: { increment: 1 } },
       });
-      if (count === 0) throw new Error('This time slot is now full. Please choose another slot.');
+      if (count === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
     }
 
     const newOrder = await tx.order.create({
@@ -184,7 +185,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
         where: { userId, balance: { gte: walletDeduction } },
         data: { balance: { decrement: walletDeduction } },
       });
-      if (count === 0) throw new Error('Your wallet balance changed. Please try again.');
+      if (count === 0) throw new AppError(400, 'Your wallet balance changed. Please try again.');
       const updatedWallet = await tx.wallet.findUniqueOrThrow({ where: { userId } });
       await tx.walletTransaction.create({
         data: {
@@ -318,7 +319,7 @@ export async function cancelOrder(
         user: { select: { isDeleted: true } },
       },
     });
-    if (!order) throw new Error('Order not found');
+    if (!order) throw new AppError(404, 'Order not found');
 
     // Atomic state change: two concurrent cancels can't both pass and double-refund.
     const { count } = await tx.order.updateMany({
@@ -326,7 +327,7 @@ export async function cancelOrder(
       data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: reason },
     });
     if (count === 0) {
-      throw new Error(cancelledBy === 'student'
+      throw new AppError(400, cancelledBy === 'student'
         ? 'Cannot cancel an order that is already being prepared'
         : 'Order can no longer be cancelled');
     }
@@ -392,4 +393,140 @@ export async function cancelOrder(
       console.error('[Order] Notification failed:', err)
     );
   }
+}
+
+// Orders paid at the counter, or fully covered by wallet credit / points
+// (totalAmount 0 -> WALLET). Online (Razorpay) orders are excluded: refunding
+// them would need a card refund, which isn't built while Razorpay is off.
+const NO_SHOW_METHODS: PaymentMethod[] = [PaymentMethod.CASH, PaymentMethod.WALLET];
+
+const NO_SHOW_ELIGIBLE: OrderStatus[] = [
+  OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING, OrderStatus.READY,
+];
+
+/**
+ * Expires one uncollected cash order: releases the slot, returns redeemed points
+ * and the wallet portion actually debited (never the cash part), and adds a strike.
+ * The guarded updateMany makes it safe to run concurrently / repeatedly.
+ * Returns false when the order was no longer eligible.
+ */
+export async function markOrderNoShow(orderId: string): Promise<boolean> {
+  const order = await prisma.$transaction(async (tx) => {
+    const before = await tx.order.findFirst({
+      where: { id: orderId, paymentMethod: { in: NO_SHOW_METHODS }, status: { in: NO_SHOW_ELIGIBLE } },
+      select: { status: true },
+    });
+    if (!before) return null;
+    // Only a READY order means the food was made and the student never came.
+    // Earlier states mean the canteen never finished it: expire, but no strike.
+    const studentAtFault = before.status === OrderStatus.READY;
+
+    const { count } = await tx.order.updateMany({
+      // Guard on the exact status we read so a concurrent transition wins cleanly.
+      where: { id: orderId, paymentMethod: { in: NO_SHOW_METHODS }, status: before.status },
+      data: {
+        status: OrderStatus.NO_SHOW,
+        cancelledAt: new Date(),
+        cancelReason: studentAtFault
+          ? 'No-show: order not collected after its pickup slot ended'
+          : 'Expired: order was not completed before its pickup slot ended',
+      },
+    });
+    if (count === 0) return null;
+
+    const o = await tx.order.findUniqueOrThrow({
+      where: { id: orderId },
+      select: {
+        userId: true, canteenId: true, slotId: true, orderNumber: true, discountAmount: true,
+        pointsRedeemed: true, paymentMethod: true, paymentStatus: true, totalAmount: true,
+        walletTransaction: { select: { type: true, amount: true } },
+        user: { select: { isDeleted: true } },
+      },
+    });
+
+    const canRefund = !!o.userId && !o.user?.isDeleted;
+    const walletDebit = o.walletTransaction?.type === 'DEBIT' ? Number(o.walletTransaction.amount) : 0;
+    if (canRefund && walletDebit > 0) {
+      const wallet = await tx.wallet.upsert({
+        where: { userId: o.userId! },
+        update: { balance: { increment: walletDebit } },
+        create: { userId: o.userId!, balance: walletDebit },
+      });
+      await tx.walletTransaction.create({
+        data: {
+          walletId: wallet.id,
+          type: 'REFUND',
+          amount: walletDebit,
+          balanceAfter: wallet.balance,
+          description: `Wallet credit returned for no-show Order #${o.orderNumber}`,
+        },
+      });
+    }
+    if (canRefund && o.pointsRedeemed > 0) {
+      await refundRedeemedPoints(
+        tx, o.userId!, orderId, o.pointsRedeemed, Number(o.discountAmount), o.orderNumber
+      );
+    }
+
+    await tx.order.update({
+      where: { id: orderId },
+      data: { paymentStatus: canRefund && walletDebit > 0 ? 'REFUNDED' : 'EXPIRED' },
+    });
+
+    if (o.slotId) {
+      await tx.pickupSlot.updateMany({
+        where: { id: o.slotId, currentOrders: { gt: 0 } },
+        data: { currentOrders: { decrement: 1 } },
+      });
+    }
+
+    if (o.userId && studentAtFault) {
+      const u = await tx.user.update({
+        where: { id: o.userId },
+        data: { orderStrikes: { increment: 1 } },
+        select: { orderStrikes: true },
+      });
+      if (u.orderStrikes >= NO_SHOW_STRIKE_LIMIT) {
+        await tx.user.update({
+          where: { id: o.userId },
+          data: { orderStrikes: 0, strikeBannedUntil: new Date(Date.now() + NO_SHOW_BAN_MS) },
+        });
+      }
+    }
+    return o;
+  });
+
+  if (!order) return false;
+  if (order.slotId) await cacheDel(...slotCacheKeys(order.slotId));
+  if (order.userId) {
+    await sendOrderNotification(order.userId, orderId, order.orderNumber, OrderStatus.NO_SHOW).catch((err) =>
+      console.error('[Order] No-show notification failed:', err)
+    );
+  }
+  return true;
+}
+
+/** Finds counter/wallet-paid orders whose slot ended NO_SHOW_GRACE_MS ago or more and expires them. */
+export async function sweepNoShowOrders(now: Date = new Date()): Promise<number> {
+  // Slot dates are IST calendar dates; a day of margin keeps the DB filter cheap and the exact check below.
+  const candidates = await prisma.order.findMany({
+    where: {
+      paymentMethod: { in: NO_SHOW_METHODS },
+      status: { in: NO_SHOW_ELIGIBLE },
+      slot: { date: { lte: new Date(now.getTime() + 24 * 60 * 60 * 1000) } },
+    },
+    select: { id: true, slot: { select: { date: true, endTime: true } } },
+  });
+
+  let expired = 0;
+  for (const { id, slot } of candidates) {
+    if (!slot) continue;
+    if (now.getTime() - slotStartsAt(slot.date, slot.endTime).getTime() < NO_SHOW_GRACE_MS) continue;
+    try {
+      if (await markOrderNoShow(id)) expired++;
+    } catch (err) {
+      console.error(`[Cron] Failed to mark order ${id} as no-show:`, err instanceof Error ? err.message : err);
+    }
+  }
+  return expired;
 }

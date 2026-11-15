@@ -36,6 +36,11 @@ export function istDateKey(at: Date = new Date()): string {
   return new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10).replace(/-/g, '');
 }
 
+/** Hour of day (0-23) in IST for an instant. */
+export function istHour(at: Date = new Date()): number {
+  return new Date(at.getTime() + IST_OFFSET_MS).getUTCHours();
+}
+
 /** Absolute start time of a pickup slot. slot.date is a calendar date; startTime is IST "HH:MM". */
 export function slotStartsAt(slotDate: Date, startTime: string): Date {
   const { hours, minutes } = parseTimeString(startTime);
@@ -43,6 +48,11 @@ export function slotStartsAt(slotDate: Date, startTime: string): Date {
     Date.UTC(slotDate.getUTCFullYear(), slotDate.getUTCMonth(), slotDate.getUTCDate(), hours, minutes) - IST_OFFSET_MS
   );
 }
+
+/** A paid-at-counter order is a no-show once its slot has ended this long ago. */
+export const NO_SHOW_GRACE_MS = 60 * 60 * 1000;
+export const NO_SHOW_STRIKE_LIMIT = 3;
+export const NO_SHOW_BAN_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Orders for a slot close this long before it starts. */
 export const SLOT_CUTOFF_MS = 10 * 60 * 1000;
@@ -105,7 +115,7 @@ export function validateBody<T extends z.ZodTypeAny>(schema: T, body: unknown, r
   { success: true; data: z.infer<T> } | { success: false } {
   const parse = schema.safeParse(body);
   if (!parse.success) {
-    res.status(400).json({ error: parse.error.flatten() });
+    res.status(400).json({ error: z.flattenError(parse.error) });
     return { success: false };
   }
   return { success: true, data: parse.data };

@@ -41,23 +41,19 @@ export async function createOrder(req: AuthRequest, res: Response) {
     select: { orderStrikes: true, strikeBannedUntil: true },
   });
   if (user?.strikeBannedUntil && user.strikeBannedUntil > new Date()) {
-    const until = user.strikeBannedUntil.toLocaleDateString('en-IN');
-    return res.status(403).json({ error: `Your account is temporarily banned until ${until} due to repeated unverified payment claims.` });
+    const until = user.strikeBannedUntil.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+    return res.status(403).json({ error: `You've been temporarily blocked from ordering after repeated no-shows until ${until}.` });
   }
 
-  try {
-    const result = await placeOrder({ userId: req.user!.id, userRole: req.user!.role, ...v.data }, req.io);
-    return res.status(201).json({
-      order: result.order,
-      razorpay: result.razorpay,
-      upiAmount: result.upiAmount,
-      pointsDiscount: result.pointsDiscount,
-      walletDeduction: result.walletDeduction,
-      subtotal: result.subtotal,
-    });
-  } catch (err: unknown) {
-    return res.status(400).json({ error: (err as Error).message });
-  }
+  const result = await placeOrder({ userId: req.user!.id, userRole: req.user!.role, ...v.data }, req.io);
+  return res.status(201).json({
+    order: result.order,
+    razorpay: result.razorpay,
+    upiAmount: result.upiAmount,
+    pointsDiscount: result.pointsDiscount,
+    walletDeduction: result.walletDeduction,
+    subtotal: result.subtotal,
+  });
 }
 
 export async function getLastOrder(req: AuthRequest, res: Response) {
@@ -141,12 +137,8 @@ export async function studentCancelOrder(req: AuthRequest, res: Response) {
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.userId !== req.user!.id) return res.status(403).json({ error: 'Forbidden' });
 
-  try {
-    await cancelOrder(id, 'student', reason, req.io);
-    return res.json({ success: true });
-  } catch (err: unknown) {
-    return res.status(400).json({ error: (err as Error).message });
-  }
+  await cancelOrder(id, 'student', reason, req.io);
+  return res.json({ success: true });
 }
 
 export async function getVendorOrders(req: AuthRequest, res: Response) {
@@ -189,12 +181,8 @@ export async function updateOrderStatus(req: AuthRequest, res: Response) {
   if (order.canteenId !== req.user!.canteenId) return res.status(403).json({ error: 'Forbidden' });
 
   if (status === OrderStatus.CANCELLED) {
-    try {
-      await cancelOrder(id, 'vendor', req.body.reason || 'Cancelled by vendor', req.io);
-      return res.json({ success: true });
-    } catch (err: unknown) {
-      return res.status(400).json({ error: (err as Error).message });
-    }
+    await cancelOrder(id, 'vendor', req.body.reason || 'Cancelled by vendor', req.io);
+    return res.json({ success: true });
   }
 
   const allowed = VALID_TRANSITIONS[order.status] ?? [];
@@ -287,12 +275,8 @@ export async function respondToOrder(req: AuthRequest, res: Response) {
     return res.json({ order: updated });
   }
 
-  try {
-    await cancelOrder(id, 'vendor', rejectReason || 'Rejected by vendor', req.io);
-    return res.json({ success: true });
-  } catch (err: unknown) {
-    return res.status(400).json({ error: (err as Error).message });
-  }
+  await cancelOrder(id, 'vendor', rejectReason || 'Rejected by vendor', req.io);
+  return res.json({ success: true });
 }
 
 export async function getPrepSheet(req: AuthRequest, res: Response) {
