@@ -10,6 +10,8 @@ import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
 const url = process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
+// order.service signs QR tokens at import; don't depend on a developer's .env being picked up.
+process.env.JWT_SECRET ||= 'integration-test-only-secret-not-for-production';
 
 vi.mock('./notification.service', () => ({ sendOrderNotification: vi.fn(async () => {}) }));
 
