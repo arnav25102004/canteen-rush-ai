@@ -6,7 +6,6 @@ const base = { DATABASE_URL: 'postgresql://x', JWT_SECRET: 'a'.repeat(32) };
 const prod = {
   ...base, NODE_ENV: 'production',
   FIREBASE_PROJECT_ID: 'p', FIREBASE_CLIENT_EMAIL: 'e', FIREBASE_PRIVATE_KEY: 'k',
-  CLOUDINARY_CLOUD_NAME: 'c', CLOUDINARY_API_KEY: 'k', CLOUDINARY_API_SECRET: 's',
   WEB_URL: 'https://app.example.com',
 };
 
@@ -18,9 +17,17 @@ describe('validateEnv', () => {
     expect(out).toContain('JWT_SECRET');
     expect(out).not.toContain('short-secret-value');
   });
-  it('requires firebase, cloudinary and origins in production', () => {
+  it('requires firebase and origins in production', () => {
     const out = validateEnv({ ...base, NODE_ENV: 'production' }).join(' ');
-    for (const k of ['FIREBASE_PROJECT_ID', 'FIREBASE_PRIVATE_KEY', 'CLOUDINARY_API_SECRET', 'CORS_ORIGINS or WEB_URL']) expect(out).toContain(k);
+    for (const k of ['FIREBASE_PROJECT_ID', 'FIREBASE_PRIVATE_KEY', 'CORS_ORIGINS or WEB_URL']) expect(out).toContain(k);
+    expect(out).not.toContain('CLOUDINARY');
+  });
+  it('cloudinary is optional, but all-or-nothing', () => {
+    expect(validateEnv(prod)).toEqual([]);
+    const partial = validateEnv({ ...prod, CLOUDINARY_CLOUD_NAME: 'c' }).join(' ');
+    expect(partial).toContain('CLOUDINARY_API_KEY');
+    expect(partial).toContain('CLOUDINARY_API_SECRET');
+    expect(validateEnv({ ...prod, CLOUDINARY_CLOUD_NAME: 'c', CLOUDINARY_API_KEY: 'k', CLOUDINARY_API_SECRET: 's' })).toEqual([]);
   });
   it('accepts a complete production env', () => expect(validateEnv(prod)).toEqual([]));
   it('requires razorpay keys only when enabled', () => {

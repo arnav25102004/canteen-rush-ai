@@ -1,7 +1,7 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest, canteenScope } from '../middleware/auth';
-import { uploadImage } from '../config/cloudinary';
+import { uploadImage, cloudinaryConfigured } from '../config/cloudinary';
 import { z } from 'zod';
 import fs from 'fs';
 
@@ -225,6 +225,9 @@ export async function uploadItemImage(req: AuthRequest, res: Response) {
   if (!req.file) return res.status(400).json({ error: 'No file uploaded' });
   const tmpPath = req.file.path;
   try {
+    if (!cloudinaryConfigured) {
+      return res.status(503).json({ error: 'Image uploads are not set up yet. Ask the admin to configure image storage.' });
+    }
     const existing = await findOwnItem(req, res);
     if (!existing) return;
     const imageUrl = await uploadImage(tmpPath, 'campus-khana/menu');
