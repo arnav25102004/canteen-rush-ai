@@ -1,19 +1,18 @@
+import './config/bootEnv'; // must stay first: loads .env and validates it
 import express from 'express';
 import http from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
 import morgan from 'morgan';
+import type { ScheduledTask } from 'node-cron';
 import { Server as SocketIOServer } from 'socket.io';
-import dotenv from 'dotenv';
-import path from 'path';
-
-dotenv.config({ path: path.resolve(__dirname, '../.env') });
 
 import { prisma } from './config/database';
 import { redis } from './config/redis';
 import { setupSocketIO } from './socket/orderSocket';
 import { logger } from './utils/logger';
+import { parseOrigins, originChecker } from './config/cors';
 
 // Routes
 import authRoutes from './routes/auth.routes';
@@ -48,22 +47,15 @@ const server = http.createServer(app);
 app.set('trust proxy', 1);
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
-const allowedOrigins = [
-  'http://localhost:3000',
-  'http://localhost:8081',
-  ...(process.env.CORS_ORIGINS?.split(',').map(o => o.trim()) || []),
-  ...(process.env.WEB_URL ? [process.env.WEB_URL] : []),
-].filter(Boolean);
+const allowedOrigins = parseOrigins();
+const checkOrigin = originChecker(allowedOrigins);
 
 // Socket.IO — mobile clients send no Origin header, so those are allowed through;
 // browser origins must be whitelisted. Every connection is additionally
 // authenticated by the handshake middleware in setupSocketIO.
 const io = new SocketIOServer(server, {
   cors: {
-    origin: (origin, cb) =>
-      !origin || allowedOrigins.includes(origin)
-        ? cb(null, true)
-        : cb(new Error('Not allowed by CORS')),
+    origin: checkOrigin,
     credentials: true,
   },
 });
@@ -84,13 +76,30 @@ app.use(helmet({
 }));
 
 app.use(cors({
-  origin: (_origin, callback) => {
-    // Allow mobile apps (no origin) and explicitly whitelisted origins
-    if (!_origin || allowedOrigins.includes(_origin)) return callback(null, true);
-    callback(new Error('Not allowed by CORS'));
-  },
+  // Mobile apps send no Origin; unknown browser origins just get no CORS headers (no 500).
+  origin: checkOrigin,
   credentials: true,
 }));
+
+// ── Health checks (before the rate limiter so probes are never throttled) ─────
+const liveness = (_req: express.Request, res: express.Response) =>
+  res.json({ status: 'ok', timestamp: new Date().toISOString() });
+app.get('/health', liveness);
+app.get('/api/health', liveness);
+app.get('/ready', async (_req, res) => {
+  let timer: NodeJS.Timeout | undefined;
+  try {
+    await Promise.race([
+      prisma.$queryRaw`SELECT 1`,
+      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('timeout')), 2000); }),
+    ]);
+    res.json({ status: 'ready' });
+  } catch {
+    res.status(503).json({ status: 'unavailable' });
+  } finally {
+    clearTimeout(timer);
+  }
+});
 
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 // Per-user limits on the expensive paths live next to their routes; see
@@ -103,7 +112,7 @@ app.use('/api/auth/forgot-password', forgotPasswordLimiter);
 app.use(compression());
 app.use(morgan('dev'));
 app.use(express.json({
-  limit: '10mb',
+  limit: '100kb',
   verify: (req: any, _res, buf) => {
     // rawBody needed by Razorpay webhook for HMAC signature verification
     req.rawBody = buf;
@@ -116,10 +125,6 @@ app.use((req: any, _res, next) => {
   req.io = io;
   next();
 });
-
-// ── Health check ──────────────────────────────────────────────────────────────
-app.get('/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
-app.get('/api/health', (_req, res) => res.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
 // ── API Routes ────────────────────────────────────────────────────────────────
 app.use('/api/auth', authRoutes);
@@ -148,6 +153,8 @@ app.use(globalErrorHandler);
 
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
+const cronTasks: ScheduledTask[] = [];
+
 async function bootstrap() {
   try {
     await prisma.$connect();
@@ -158,6 +165,7 @@ async function bootstrap() {
   }
 
   try {
+    await redis.connect();
     await redis.ping();
     logger.info('Redis connected');
   } catch (err) {
@@ -168,8 +176,7 @@ async function bootstrap() {
   if (FEATURES.RAZORPAY_ENABLED) {
     logger.warn('RAZORPAY_ENABLED=true: cancel/no-show refunds are credited to the student wallet and do NOT reverse Razorpay Route transfers or refund the card. Reconcile vendor payouts manually.');
   }
-  startSlotGenerationJob();
-  startAutoCancelJob();
+  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob());
 
   server.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);
@@ -180,6 +187,39 @@ async function bootstrap() {
 // work). Route handlers are already covered by utils/router.
 process.on('unhandledRejection', (reason) => {
   logger.error('Unhandled promise rejection', { reason });
+});
+
+let shuttingDown = false;
+async function shutdown(signal: string, exitCode: number) {
+  if (shuttingDown) return;
+  shuttingDown = true;
+  logger.info(`${signal} received, shutting down gracefully`);
+  setTimeout(() => {
+    logger.error('Graceful shutdown timed out, forcing exit');
+    process.exit(1);
+  }, 10_000).unref();
+
+  // io.close() disconnects websocket clients and closes the underlying HTTP
+  // server; calling server.close() first would hang on open websockets.
+  try {
+    await new Promise<void>((resolve) => io.close(() => resolve()));
+    if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
+    logger.info('HTTP and Socket.IO servers closed');
+  } catch (err) { logger.warn('Server close failed', { err }); }
+  for (const task of cronTasks) {
+    try { await task.stop(); } catch (err) { logger.warn('Cron stop failed', { err }); }
+  }
+  try { await prisma.$disconnect(); } catch (err) { logger.warn('Prisma disconnect failed', { err }); }
+  try { await redis.quit(); } catch { redis.disconnect(); }
+  logger.info('Shutdown complete');
+  process.exit(exitCode);
+}
+
+process.once('SIGTERM', () => void shutdown('SIGTERM', 0));
+process.once('SIGINT', () => void shutdown('SIGINT', 0));
+process.on('uncaughtException', (err) => {
+  logger.error('Uncaught exception', { err: err.stack || err });
+  void shutdown('uncaughtException', 1);
 });
 
 bootstrap();

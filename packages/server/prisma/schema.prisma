@@ -275,6 +275,8 @@ model Order {
   @@index([canteenId, paymentStatus])
   @@index([canteenId, slotId])
   @@index([qrCode])
+  @@index([canteenId, createdAt])
+  @@index([paymentStatus, createdAt])
   @@map("orders")
 }
 
@@ -291,6 +293,7 @@ model OrderItem {
   order    Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
   menuItem MenuItem @relation(fields: [menuItemId], references: [id])
 
+  @@index([orderId])
   @@map("order_items")
 }
 

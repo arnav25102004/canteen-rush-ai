@@ -1,3 +1,4 @@
+import { AppError } from '../utils/errors';
 import Razorpay from 'razorpay';
 import { prisma } from '../config/database';
 import { cacheDel, slotCacheKeys } from '../config/redis';
@@ -71,19 +72,19 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   });
 
   if (menuItems.length !== new Set(items.map((i) => i.menuItemId)).size) {
-    throw new Error('One or more items are invalid or belong to a different canteen');
+    throw new AppError(400, 'One or more items are invalid or belong to a different canteen');
   }
 
   const unavailable = menuItems.filter((m) => !m.isAvailable);
   if (unavailable.length > 0) {
-    throw new Error(`${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
+    throw new AppError(400, `${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
   }
 
   const canteen = await prisma.canteen.findUnique({
     where: { id: canteenId },
     select: { id: true, name: true, isActive: true, razorpayAccountId: true },
   });
-  if (!canteen || !canteen.isActive) throw new Error('Canteen not found');
+  if (!canteen || !canteen.isActive) throw new AppError(404, 'Canteen not found');
 
   // Slot rules: same canteen, not past the cutoff, and capacity left for this user's role.
   // Faculty may also use the faculty-reserved seats; students may not.
@@ -91,18 +92,18 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   if (slotId) {
     const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
     if (!slot || slot.canteenId !== canteenId || !slot.isOpen) {
-      throw new Error('This time slot is closed. Please choose another slot.');
+      throw new AppError(400, 'This time slot is closed. Please choose another slot.');
     }
     if (slotStartsAt(slot.date, slot.startTime).getTime() - Date.now() < SLOT_CUTOFF_MS) {
-      throw new Error('Ordering for this slot has closed. Please choose a later slot.');
+      throw new AppError(400, 'Ordering for this slot has closed. Please choose a later slot.');
     }
     const isFaculty = userRole === UserRole.FACULTY || userRole === UserRole.ADMIN;
     slotCap = slot.maxOrders - slot.walkInReserved - (isFaculty ? 0 : slot.facultyReserved);
-    if (slot.currentOrders >= slotCap) throw new Error('This time slot is full. Please choose another slot.');
+    if (slot.currentOrders >= slotCap) throw new AppError(400, 'This time slot is full. Please choose another slot.');
   }
 
   const pointsValidation = await validatePointsRedemption(userId, pointsToRedeem);
-  if (!pointsValidation.valid) throw new Error(pointsValidation.error || 'Invalid points redemption');
+  if (!pointsValidation.valid) throw new AppError(400, pointsValidation.error || 'Invalid points redemption');
   const pointsDiscount = pointsValidation.discountAmount;
 
   // Prices always come from the DB, never the client
@@ -125,7 +126,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     };
   });
 
-  if (pointsDiscount > subtotal) throw new Error('Points discount is larger than the order total');
+  if (pointsDiscount > subtotal) throw new AppError(400, 'Points discount is larger than the order total');
 
   // Wallet credit is applied automatically
   const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
@@ -143,7 +144,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
         where: { id: slotId, isOpen: true, currentOrders: { lt: slotCap } },
         data: { currentOrders: { increment: 1 } },
       });
-      if (count === 0) throw new Error('This time slot is now full. Please choose another slot.');
+      if (count === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
     }
 
     const newOrder = await tx.order.create({
@@ -184,7 +185,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
         where: { userId, balance: { gte: walletDeduction } },
         data: { balance: { decrement: walletDeduction } },
       });
-      if (count === 0) throw new Error('Your wallet balance changed. Please try again.');
+      if (count === 0) throw new AppError(400, 'Your wallet balance changed. Please try again.');
       const updatedWallet = await tx.wallet.findUniqueOrThrow({ where: { userId } });
       await tx.walletTransaction.create({
         data: {
@@ -318,7 +319,7 @@ export async function cancelOrder(
         user: { select: { isDeleted: true } },
       },
     });
-    if (!order) throw new Error('Order not found');
+    if (!order) throw new AppError(404, 'Order not found');
 
     // Atomic state change: two concurrent cancels can't both pass and double-refund.
     const { count } = await tx.order.updateMany({
@@ -326,7 +327,7 @@ export async function cancelOrder(
       data: { status: OrderStatus.CANCELLED, cancelledAt: new Date(), cancelReason: reason },
     });
     if (count === 0) {
-      throw new Error(cancelledBy === 'student'
+      throw new AppError(400, cancelledBy === 'student'
         ? 'Cannot cancel an order that is already being prepared'
         : 'Order can no longer be cancelled');
     }

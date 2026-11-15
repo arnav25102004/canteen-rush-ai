@@ -150,10 +150,12 @@ export async function register(req: Request, res: Response) {
 
   // Existing row with this email (e.g. seeded): safe to link because the token
   // proves ownership of the inbox. Role is left untouched.
-  const existingByEmail = await prisma.user.findUnique({ where: { email } });
+  const existingByEmail = await prisma.user.findFirst({
+    where: { email: { equals: email, mode: 'insensitive' } },
+  });
   if (existingByEmail) {
     const user = await prisma.user.update({
-      where: { email },
+      where: { id: existingByEmail.id },
       data: { firebaseUid: decoded.uid, institutionId: institution.id },
       include: { wallet: true },
     });

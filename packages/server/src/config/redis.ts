@@ -1,13 +1,14 @@
 import Redis from 'ioredis';
 
 export const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379', {
-  maxRetriesPerRequest: 1,
+  maxRetriesPerRequest: 1, // queued commands fail fast while disconnected (callers fall back to the DB)
   enableReadyCheck: false,
   connectTimeout: 5000,
+  commandTimeout: 2000,
   lazyConnect: true,
+  // Never give up: Redis may come back at any time. Capped backoff.
   retryStrategy(times) {
-    if (times > 3) return null;
-    return Math.min(times * 500, 2000);
+    return Math.min(times * 200, 5000);
   },
 });
 

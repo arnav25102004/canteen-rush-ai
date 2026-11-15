@@ -36,6 +36,11 @@ export function istDateKey(at: Date = new Date()): string {
   return new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(0, 10).replace(/-/g, '');
 }
 
+/** Hour of day (0-23) in IST for an instant. */
+export function istHour(at: Date = new Date()): number {
+  return new Date(at.getTime() + IST_OFFSET_MS).getUTCHours();
+}
+
 /** Absolute start time of a pickup slot. slot.date is a calendar date; startTime is IST "HH:MM". */
 export function slotStartsAt(slotDate: Date, startTime: string): Date {
   const { hours, minutes } = parseTimeString(startTime);

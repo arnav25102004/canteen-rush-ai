@@ -1,5 +1,7 @@
+import { AppError } from '../utils/errors';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../config/database';
+import { istHour } from '../utils/helpers';
 
 const POINTS_PER_RUPEE = 0.1; // ₹10 = 1 point
 const DOUBLE_POINTS_BEFORE_HOUR = 9; // before 9 AM
@@ -56,7 +58,7 @@ export async function redeemPoints(
     where: { userId, totalPoints: { gte: pointsToRedeem } },
     data: { totalPoints: { decrement: pointsToRedeem }, totalSaved: { increment: discountAmount } },
   });
-  if (count === 0) throw new Error('Not enough loyalty points');
+  if (count === 0) throw new AppError(400, 'Not enough loyalty points');
 
   const account = await tx.loyaltyAccount.findUniqueOrThrow({ where: { userId } });
   await tx.pointTransaction.create({
@@ -111,7 +113,7 @@ export async function awardPointsForOrder(orderId: string): Promise<void> {
   if (!order.userId || !order.user || order.user.isDeleted) return;
   const { userId, user } = order;
 
-  const orderHour = order.createdAt.getHours();
+  const orderHour = istHour(order.createdAt);
   const isDoublePoints = orderHour < DOUBLE_POINTS_BEFORE_HOUR;
   const basePoints = Math.max(1, Math.floor(Number(order.subtotal) * POINTS_PER_RUPEE));
   const pointsToAward = isDoublePoints ? basePoints * 2 : basePoints;

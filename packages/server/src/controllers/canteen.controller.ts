@@ -2,7 +2,8 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { validateBody } from '../utils/helpers';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
+import { FEATURES } from '../config/features';
 import { z } from 'zod';
 
 const ACTIVE_STATUSES = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
@@ -24,6 +25,23 @@ const canteenSchema = z.object({
   vendorUpiName: z.string().optional(),
 });
 
+// Public fields only: no razorpayAccountId / vendorUpiId / vendorUpiName.
+// vendorId is kept because the web admin "vendors" page maps vendor -> canteen with it.
+const PUBLIC_CANTEEN_SELECT = {
+  id: true, name: true, description: true, campus: true, location: true,
+  imageUrl: true, bannerUrl: true, isActive: true, openingTime: true, closingTime: true,
+  contactPhone: true, avgPrepTime: true, institutionId: true, vendorId: true,
+  createdAt: true, updatedAt: true,
+  razorpayAccountId: true, // only used to derive onlinePaymentEnabled; stripped by toPublicCanteen
+  vendor: { select: { name: true } },
+  _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
+} satisfies Prisma.CanteenSelect;
+
+function toPublicCanteen<T extends { razorpayAccountId: string | null }>(c: T) {
+  const { razorpayAccountId, ...rest } = c;
+  return { ...rest, onlinePaymentEnabled: FEATURES.RAZORPAY_ENABLED && !!razorpayAccountId };
+}
+
 export async function listCanteens(req: Request, res: Response) {
   const { campus, includeInactive } = req.query;
   const canteens = await prisma.canteen.findMany({
@@ -31,26 +49,20 @@ export async function listCanteens(req: Request, res: Response) {
       ...(includeInactive !== 'true' ? { isActive: true } : {}),
       ...(campus ? { campus: { contains: campus as string, mode: 'insensitive' } } : {}),
     },
-    include: {
-      vendor: { select: { name: true } },
-      _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
-    },
+    select: PUBLIC_CANTEEN_SELECT,
     orderBy: { name: 'asc' },
   });
-  return res.json({ canteens });
+  return res.json({ canteens: canteens.map(toPublicCanteen) });
 }
 
 export async function getCanteen(req: Request, res: Response) {
   const { id } = req.params;
   const canteen = await prisma.canteen.findUnique({
     where: { id },
-    include: {
-      vendor: { select: { name: true } },
-      _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
-    },
+    select: PUBLIC_CANTEEN_SELECT,
   });
   if (!canteen) return res.status(404).json({ error: 'Canteen not found' });
-  return res.json({ canteen });
+  return res.json({ canteen: toPublicCanteen(canteen) });
 }
 
 export async function getCanteenLiveStats(req: Request, res: Response) {
