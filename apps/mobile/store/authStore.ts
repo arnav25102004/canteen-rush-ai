@@ -62,6 +62,32 @@ export function mapUser(dataUser: ApiUser): AppUser {
   };
 }
 
+export class EmailNotVerifiedError extends Error {
+  constructor() {
+    super('Please verify your email first. Open the verification link we emailed you, then sign in again.');
+    this.name = 'EmailNotVerifiedError';
+  }
+}
+
+const RESEND_COOLDOWN_MS = 60_000;
+let lastResendAt = 0;
+
+/** Signs in just long enough to resend the verification mail. Returns seconds to wait if throttled. */
+export async function resendVerificationEmail(email: string, password: string): Promise<number> {
+  const wait = Math.ceil((lastResendAt + RESEND_COOLDOWN_MS - Date.now()) / 1000);
+  if (wait > 0) return wait;
+  const cred = await signInWithEmailAndPassword(auth, email, password);
+  try {
+    if (!cred.user.emailVerified) {
+      lastResendAt = Date.now();
+      await sendEmailVerification(cred.user);
+    }
+  } finally {
+    await signOut(auth).catch(() => {});
+  }
+  return 0;
+}
+
 export const useAuthStore = create<AuthStore>((set) => ({
   user: null,
   institution: null,
@@ -91,10 +117,12 @@ export const useAuthStore = create<AuthStore>((set) => ({
   login: async (email, password) => {
     const userCredential = await signInWithEmailAndPassword(auth, email, password);
     // The server rejects tokens for unverified emails — catch it here with a clear message.
+    // Never send mail from here: each failed login would trigger another
+    // verification email and Firebase soon answers auth/too-many-requests.
+    // The login screen offers an explicit "Resend" button with a cooldown.
     if (!userCredential.user.emailVerified) {
-      await sendEmailVerification(userCredential.user);
       await signOut(auth);
-      throw new Error('Please verify your email first. We sent a new verification link to your inbox.');
+      throw new EmailNotVerifiedError();
     }
     const token = await userCredential.user.getIdToken();
 
