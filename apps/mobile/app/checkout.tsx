@@ -18,25 +18,19 @@ export default function CheckoutScreen() {
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [placing, setPlacing] = useState(false);
   const [loyaltyPoints, setLoyaltyPoints] = useState(0);
-  const [walletCredit, setWalletCredit] = useState(0);
   const [selectedPointsTier, setSelectedPointsTier] = useState<number>(0);
 
   const orderTotal = total();
   const pointsDiscount = REDEMPTION_TIERS.find(t => t.points === selectedPointsTier)?.discount || 0;
   const afterPoints = orderTotal - pointsDiscount;
-  const walletApplied = Math.min(walletCredit, afterPoints);
-  const amountDue = Math.max(0, afterPoints - walletApplied);
+  const amountDue = Math.max(0, afterPoints);
 
-  useEffect(() => { loadLoyaltyAndWallet(); }, []);
+  useEffect(() => { loadLoyalty(); }, []);
 
-  async function loadLoyaltyAndWallet() {
+  async function loadLoyalty() {
     try {
-      const [loyaltyRes, walletRes] = await Promise.all([
-        api.get('/loyalty').catch(() => ({ data: { account: { totalPoints: 0 } } })),
-        api.get('/wallet').catch(() => ({ data: { wallet: { balance: 0 } } })),
-      ]);
+      const loyaltyRes = await api.get('/loyalty').catch(() => ({ data: { account: { totalPoints: 0 } } }));
       setLoyaltyPoints(loyaltyRes.data.account?.totalPoints || 0);
-      setWalletCredit(Number(walletRes.data.wallet?.balance || 0));
     } catch { /* ignore */ }
   }
 
@@ -54,7 +48,7 @@ export default function CheckoutScreen() {
 
       const orderId: string = data.order.id;
 
-      // Step 2a: Free order (wallet/points fully cover it) — go straight to tracking
+      // Step 2a: Free order (points fully cover it) — go straight to tracking
       if (amountDue === 0 || !data.razorpay) {
         clear();
         router.replace({ pathname: '/order/[id]', params: { id: orderId } });
@@ -146,30 +140,13 @@ export default function CheckoutScreen() {
         </View>
       )}
 
-      {/* Wallet Credit */}
-      {walletCredit > 0 && (
-        <View style={styles.walletCard}>
-          <Text style={styles.walletIcon}>💰</Text>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.walletTitle}>Wallet Credit — ₹{walletCredit.toFixed(0)} applying automatically</Text>
-            <Text style={styles.walletSub}>From refunded orders</Text>
-          </View>
-        </View>
-      )}
-
       {/* Discount summary */}
-      {(pointsDiscount > 0 || walletApplied > 0) && (
+      {pointsDiscount > 0 && (
         <View style={styles.card}>
           {pointsDiscount > 0 && (
             <View style={styles.row}>
               <Text style={styles.rowLabel}>Points discount ({selectedPointsTier} pts)</Text>
               <Text style={[styles.rowValue, { color: '#10b981' }]}>−₹{pointsDiscount}</Text>
-            </View>
-          )}
-          {walletApplied > 0 && (
-            <View style={styles.row}>
-              <Text style={styles.rowLabel}>Wallet credit applied</Text>
-              <Text style={[styles.rowValue, { color: '#10b981' }]}>−₹{walletApplied.toFixed(0)}</Text>
             </View>
           )}
           <View style={[styles.row, styles.totalRow]}>
@@ -207,7 +184,7 @@ export default function CheckoutScreen() {
         <View style={[styles.payCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
           <Text style={styles.payIcon}>✅</Text>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.payTitle, { color: '#15803d' }]}>Fully covered by wallet/points</Text>
+            <Text style={[styles.payTitle, { color: '#15803d' }]}>Fully covered by points</Text>
             <Text style={[styles.paySubtitle, { color: '#166534' }]}>No payment needed</Text>
           </View>
         </View>
@@ -247,10 +224,6 @@ const styles = StyleSheet.create({
   tierLabel: { fontSize: 14, color: '#333', fontWeight: '500' },
   tierLabelDisabled: { color: '#aaa' },
   tierAway: { fontSize: 12, color: '#aaa' },
-  walletCard: { backgroundColor: '#eff6ff', borderRadius: 14, padding: 16, marginBottom: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#bfdbfe' },
-  walletIcon: { fontSize: 28 },
-  walletTitle: { fontSize: 14, fontWeight: '600', color: '#1e40af' },
-  walletSub: { fontSize: 12, color: '#3b82f6', marginTop: 2 },
   instructionsInput: { borderWidth: 1, borderColor: '#e5e7eb', borderRadius: 10, padding: 10, fontSize: 14, color: '#333', minHeight: 60, textAlignVertical: 'top' },
   payCard: { backgroundColor: '#faf5ff', borderRadius: 14, padding: 16, marginBottom: 14, flexDirection: 'row', alignItems: 'center', gap: 12, borderWidth: 1, borderColor: '#e9d5ff' },
   payIcon: { fontSize: 32 },
