@@ -9,6 +9,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useAuthStore, mapUser } from '../store/authStore';
 import api from '../services/api';
 import { CONFIG } from '../config';
+import { ThemeProvider } from '../design-system/theme/ThemeProvider';
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   return (
@@ -127,17 +128,19 @@ export default function RootLayout() {
   }
 
   return (
-    <View style={{ flex: 1 }}>
-      <OfflineBanner />
-      <Stack screenOptions={{ headerShown: false }}>
-        <Stack.Screen name="select-institution" />
-        <Stack.Screen name="(auth)" />
-        <Stack.Screen name="(tabs)" />
-        <Stack.Screen name="canteen/[id]" options={{ headerShown: true, title: '' }} />
-        <Stack.Screen name="cart" options={{ headerShown: true, title: 'Cart' }} />
-        <Stack.Screen name="checkout" options={{ headerShown: true, title: 'Checkout' }} />
-        <Stack.Screen name="order/[id]" options={{ headerShown: true, title: 'Order Tracking' }} />
-      </Stack>
-    </View>
+    <ThemeProvider>
+      <View style={{ flex: 1 }}>
+        <OfflineBanner />
+        <Stack screenOptions={{ headerShown: false }}>
+          <Stack.Screen name="select-institution" />
+          <Stack.Screen name="(auth)" />
+          <Stack.Screen name="(tabs)" />
+          <Stack.Screen name="canteen/[id]" options={{ headerShown: true, title: '' }} />
+          <Stack.Screen name="cart" options={{ headerShown: true, title: 'Cart' }} />
+          <Stack.Screen name="checkout" options={{ headerShown: true, title: 'Checkout' }} />
+          <Stack.Screen name="order/[id]" options={{ headerShown: true, title: 'Order Tracking' }} />
+        </Stack>
+      </View>
+    </ThemeProvider>
   );
 }

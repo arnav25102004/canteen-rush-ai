@@ -1,11 +1,8 @@
-version: '3.8'
-
 services:
   postgres:
     image: postgres:16-alpine
     container_name: christ_canteen_postgres
-    ports:
-      - "5432:5432"
+    network_mode: host
     environment:
       POSTGRES_DB: christ_canteen
       POSTGRES_USER: canteen_user
@@ -21,8 +18,7 @@ services:
   redis:
     image: redis:7-alpine
     container_name: christ_canteen_redis
-    ports:
-      - "6379:6379"
+    network_mode: host
     volumes:
       - redisdata:/data
     healthcheck:

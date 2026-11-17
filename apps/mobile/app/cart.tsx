@@ -1,6 +1,7 @@
 import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useCartStore } from '../store/cartStore';
+import { Button } from '../design-system/components/Button';
 
 export default function CartScreen() {
   const router = useRouter();
@@ -11,9 +12,12 @@ export default function CartScreen() {
       <View style={styles.center}>
         <Text style={styles.emptyIcon}>🛒</Text>
         <Text style={styles.emptyText}>Your cart is empty</Text>
-        <TouchableOpacity style={styles.browseBtn} onPress={() => router.back()}>
-          <Text style={styles.browseBtnText}>Browse Menu</Text>
-        </TouchableOpacity>
+        <Button
+          label="Browse Menu"
+          variant="filled"
+          size="medium"
+          onPress={() => router.back()}
+        />
       </View>
     );
   }
@@ -65,9 +69,13 @@ export default function CartScreen() {
           <Text style={styles.totalLabel}>Total</Text>
           <Text style={styles.totalAmount}>₹{total().toFixed(0)}</Text>
         </View>
-        <TouchableOpacity style={styles.checkoutBtn} onPress={() => router.push('/checkout')}>
-          <Text style={styles.checkoutBtnText}>Proceed to Checkout →</Text>
-        </TouchableOpacity>
+        <Button
+          label="Proceed to Checkout →"
+          variant="filled"
+          size="large"
+          fullWidth
+          onPress={() => router.push('/checkout')}
+        />
       </View>
     </View>
   );

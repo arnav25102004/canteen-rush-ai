@@ -1,0 +1,13 @@
+{
+  "name": "campus-khana",
+  "private": true,
+  "description": "Pre-order system for university canteens",
+  "scripts": {
+    "install:all": "npm install --prefix packages/server && npx --prefix packages/server prisma generate && npm install --prefix apps/web && npm install --legacy-peer-deps --prefix apps/mobile",
+    "dev:web": "(npm run dev --prefix packages/server) & (npm run dev --prefix apps/web)",
+    "dev:mobile": "(npm run dev --prefix packages/server) & (npm start --prefix apps/mobile)",
+    "server": "npm run dev --prefix packages/server",
+    "web": "npm run dev --prefix apps/web",
+    "mobile": "npm start --prefix apps/mobile"
+  }
+}
