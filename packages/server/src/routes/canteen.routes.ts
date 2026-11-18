@@ -14,7 +14,7 @@ router.get('/my', authenticate, requireVendor, getMyCanteen);
 router.put('/my', authenticate, requireVendor, updateMyCanteen);
 
 router.get('/', listCanteens);
-router.get('/search', searchMenuGlobal);
+router.get('/search', optionalAuthenticate, searchMenuGlobal);
 router.get('/:id', getCanteen);
 router.get('/:id/live-stats', getCanteenLiveStats);
 router.get('/:id/menu', getCanteenMenu);
