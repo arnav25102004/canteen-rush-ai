@@ -9,6 +9,7 @@ import NetInfo from '@react-native-community/netinfo';
 import { useAuthStore, mapUser } from '../store/authStore';
 import api from '../services/api';
 import { CONFIG } from '../config';
+import { startFeedbackQueue } from '../services/feedbackQueue';
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   return (
@@ -62,6 +63,9 @@ export default function RootLayout() {
       setServerError(true);
     }
   }, []);
+
+  // Retry any review that was saved offline, on reconnect and when the app returns to the foreground.
+  useEffect(() => startFeedbackQueue(), []);
 
   useEffect(() => {
     checkServer();
@@ -138,6 +142,7 @@ export default function RootLayout() {
         <Stack.Screen name="checkout" options={{ headerShown: true, title: 'Checkout' }} />
         <Stack.Screen name="assistant" options={{ headerShown: true, title: 'Khana Assistant' }} />
         <Stack.Screen name="order/[id]" options={{ headerShown: true, title: 'Order Tracking' }} />
+        <Stack.Screen name="feedback/order/[orderId]" options={{ presentation: 'fullScreenModal' }} />
       </Stack>
     </View>
   );
