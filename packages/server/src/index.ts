@@ -36,6 +36,7 @@ import { globalLimiter, authLimiter, forgotPasswordLimiter } from './middleware/
 import { FEATURES } from './config/features';
 import { startSlotGenerationJob } from './jobs/slotGeneration.cron';
 import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
+import { startAssistantRetentionJob } from './jobs/assistantRetention.cron';
 
 const app = express();
 const server = http.createServer(app);
@@ -184,7 +185,7 @@ async function bootstrap() {
   if (FEATURES.RAZORPAY_ENABLED) {
     logger.warn('RAZORPAY_ENABLED=true: cancel/no-show refunds are credited to the student wallet and do NOT reverse Razorpay Route transfers or refund the card. Reconcile vendor payouts manually.');
   }
-  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob());
+  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob());
 
   server.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);
