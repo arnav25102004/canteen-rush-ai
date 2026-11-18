@@ -6,7 +6,7 @@ import multer from 'multer';
 import { NextFunction, Request, Response } from 'express';
 import { AppError } from '../utils/errors';
 import { MAX_ATTACHMENT_BYTES } from '../services/feedbackExtras.service';
-import { attach, ideas, vote, unvote, eligibility, createOrder, createApp, update, remove, mine, getOne } from '../controllers/feedback.controller';
+import { attach, ideas, vote, unvote, eligibility, createOrder, createApp, update, remove, mine, getOne, report } from '../controllers/feedback.controller';
 
 const router = Router();
 
@@ -23,6 +23,7 @@ function singleImage(req: Request, res: Response, next: NextFunction) {
 const attachLimiter = userLimiter('feedback-attach', 60 * 60 * 1000, 10);
 const voteLimiter = userLimiter('feedback-vote', 60 * 60 * 1000, 30);
 const createLimiter = userLimiter('feedback-create', 60 * 60 * 1000, 10);
+const reportLimiter = userLimiter('feedback-report', 24 * 60 * 60 * 1000, 20);
 const editLimiter = userLimiter('feedback-edit', 60 * 60 * 1000, 20);
 
 // Fixed paths first so '/mine' is not read as an :id.
@@ -40,5 +41,6 @@ router.delete('/:id/vote', authenticate, voteLimiter, unvote);
 router.get('/:id', authenticate, getOne);
 router.patch('/:id', authenticate, editLimiter, update);
 router.delete('/:id', authenticate, editLimiter, remove);
+router.post('/:id/report', authenticate, reportLimiter, report);
 
 export default router;

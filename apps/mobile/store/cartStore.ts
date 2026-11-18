@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 
-interface CartItem {
+export interface CartItem {
   menuItemId: string;
   name: string;
   price: number;
@@ -9,10 +9,21 @@ interface CartItem {
   customizations?: Record<string, string>;
 }
 
+export interface CartSlot {
+  id: string;
+  startTime: string;
+  endTime: string;
+  date: string;
+}
+
 interface CartStore {
   canteenId: string | null;
   canteenName: string | null;
   items: CartItem[];
+  slot: CartSlot | null;
+  setSlot: (slot: CartSlot | null) => void;
+  /** Replaces the whole cart in one step (reorder, assistant hand-off). */
+  replaceCart: (canteenId: string, canteenName: string, items: CartItem[], slot?: CartSlot | null) => void;
   addItem: (canteenId: string, canteenName: string, item: Omit<CartItem, 'quantity'>) => void;
   removeItem: (menuItemId: string) => void;
   updateQty: (menuItemId: string, quantity: number) => void;
@@ -25,6 +36,12 @@ export const useCartStore = create<CartStore>((set, get) => ({
   canteenId: null,
   canteenName: null,
   items: [],
+  slot: null,
+
+  setSlot: (slot) => set({ slot }),
+
+  replaceCart: (canteenId, canteenName, items, slot = null) =>
+    set({ canteenId, canteenName, items: items.filter((i) => i.quantity > 0), slot }),
 
   addItem: (canteenId, canteenName, item) => {
     const { items, canteenId: currentCanteen } = get();
@@ -38,6 +55,8 @@ export const useCartStore = create<CartStore>((set, get) => ({
         canteenId,
         canteenName,
         items: startFresh ? [{ ...item, quantity: 1 }] : [...items, { ...item, quantity: 1 }],
+        // A slot belongs to one canteen: drop it when the canteen changes.
+        ...(startFresh ? { slot: null } : {}),
       });
     }
   },
@@ -52,7 +71,7 @@ export const useCartStore = create<CartStore>((set, get) => ({
     }
   },
 
-  clear: () => set({ canteenId: null, canteenName: null, items: [] }),
+  clear: () => set({ canteenId: null, canteenName: null, items: [], slot: null }),
 
   total: () => get().items.reduce((sum, i) => sum + i.price * i.quantity, 0),
 
