@@ -63,6 +63,29 @@ export function visibleItemWhere(o: { institutionId: string; canteenId?: string;
   };
 }
 
+/**
+ * Plain-text menu search for the global search box: available items of ACTIVE canteens
+ * of one institution whose name or description contains the text.
+ */
+export async function searchMenuByText(institutionId: string, text: string, take = 50) {
+  return prisma.menuItem.findMany({
+    take,
+    where: {
+      isAvailable: true,
+      canteen: { institutionId, isActive: true },
+      OR: [
+        { name: { contains: text, mode: 'insensitive' } },
+        { description: { contains: text, mode: 'insensitive' } },
+      ],
+    },
+    include: {
+      canteen: { select: { id: true, name: true, campus: true } },
+      category: { select: { name: true } },
+    },
+    orderBy: { totalOrders: 'desc' },
+  });
+}
+
 export interface MenuSearch {
   /** Only canteens of this institution are searched. */
   institutionId: string;

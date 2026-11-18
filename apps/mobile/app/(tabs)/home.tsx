@@ -19,7 +19,6 @@ interface LastOrder {
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { addItem, clear } = useCartStore();
   const { institution, switchInstitution } = useAuthStore();
   const [canteens, setCanteens] = useState<Canteen[]>([]);
   const [filtered, setFiltered] = useState<Canteen[]>([]);
@@ -72,19 +71,17 @@ export default function HomeScreen() {
       Alert.alert('Items Unavailable', `${unavailable.map(i => i.menuItem.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} no longer available.`);
       return;
     }
-    clear();
-    lastOrder.items.forEach(i => {
-      addItem(lastOrder.canteen.id, lastOrder.canteen.name, {
+    useCartStore.getState().replaceCart(
+      lastOrder.canteen.id,
+      lastOrder.canteen.name,
+      lastOrder.items.map(i => ({
         menuItemId: i.menuItem.id,
         name: i.menuItem.name,
         price: Number(i.menuItem.price),
         isVeg: i.menuItem.isVeg ?? true,
-      });
-      // Adjust quantity if > 1
-      if (i.quantity > 1) {
-        useCartStore.getState().updateQty(i.menuItem.id, i.quantity);
-      }
-    });
+        quantity: i.quantity,
+      })),
+    );
     router.push('/checkout');
   }
 
