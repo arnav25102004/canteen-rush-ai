@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import { View, ActivityIndicator, Text, TouchableOpacity } from 'react-native';
-import { Stack, useRouter, useSegments, type ErrorBoundaryProps } from 'expo-router';
+import { Stack, useRouter, useSegments, usePathname, type ErrorBoundaryProps } from 'expo-router';
+import { recordRoute } from '../services/diagnostics';
 import axios from 'axios';
 import { onAuthStateChanged } from 'firebase/auth';
 import { auth } from '../firebaseConfig';
@@ -51,6 +52,7 @@ export default function RootLayout() {
   const { user, institution, isLoaded, loadFromStorage } = useAuthStore();
   const router = useRouter();
   const segments = useSegments();
+  const pathname = usePathname();
   const [serverReady, setServerReady] = useState(false);
   const [serverError, setServerError] = useState(false);
 
@@ -66,6 +68,9 @@ export default function RootLayout() {
 
   // Retry any review that was saved offline, on reconnect and when the app returns to the foreground.
   useEffect(() => startFeedbackQueue(), []);
+
+  // Last 20 route changes, kept in memory only, attached to bug reports when the user allows it.
+  useEffect(() => { recordRoute(pathname); }, [pathname]);
 
   useEffect(() => {
     checkServer();
@@ -143,6 +148,8 @@ export default function RootLayout() {
         <Stack.Screen name="assistant" options={{ headerShown: true, title: 'Khana Assistant' }} />
         <Stack.Screen name="order/[id]" options={{ headerShown: true, title: 'Order Tracking' }} />
         <Stack.Screen name="feedback/order/[orderId]" options={{ presentation: 'fullScreenModal' }} />
+        <Stack.Screen name="feedback/app" options={{ presentation: 'fullScreenModal' }} />
+        <Stack.Screen name="feedback/mine" />
       </Stack>
     </View>
   );

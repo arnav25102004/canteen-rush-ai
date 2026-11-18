@@ -3,9 +3,9 @@ import { z } from 'zod';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/errors';
 import { logger } from '../utils/logger';
-import { createOrderReviewSchema, updateFeedbackSchema } from '../utils/feedbackSchemas';
+import { createAppFeedbackSchema, createOrderReviewSchema, updateFeedbackSchema } from '../utils/feedbackSchemas';
 import {
-  createOrderReview, deleteOrderReview, getEligibility, getMine, listMine, updateOrderReview,
+  createAppFeedback, createOrderReview, deleteOrderReview, getEligibility, getMine, listMine, updateOrderReview,
 } from '../services/feedback.service';
 
 const idSchema = z.string().uuid();
@@ -29,6 +29,13 @@ export async function createOrder(req: AuthRequest, res: Response) {
   const input = createOrderReviewSchema.parse(req.body);
   const { feedback, created } = await createOrderReview(req.user!.id, input);
   if (created) logger.info('Order review created', { feedbackId: feedback.id });
+  return res.status(created ? 201 : 200).json({ feedback });
+}
+
+export async function createApp(req: AuthRequest, res: Response) {
+  const input = createAppFeedbackSchema.parse(req.body);
+  const { feedback, created } = await createAppFeedback(req.user!.id, input);
+  if (created) logger.info('App feedback created', { feedbackId: feedback.id });
   return res.status(created ? 201 : 200).json({ feedback });
 }
 
