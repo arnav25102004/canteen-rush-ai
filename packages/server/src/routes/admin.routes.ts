@@ -1,6 +1,6 @@
 import { Router } from '../utils/router';
 import {
-  listVendors, assignVendorToCanteen,
+  listVendors, assignVendorToCanteen, unassignVendor,
   createAnnouncement, toggleAnnouncement, listAnnouncements,
   getSettlements, markSettlementPaid,
   listUsers, updateUserRole, banUser, unbanUser,
@@ -13,6 +13,7 @@ router.use(authenticate, requireAdmin);
 
 router.get('/vendors', listVendors);
 router.post('/vendors/assign', assignVendorToCanteen);
+router.post('/vendors/unassign', unassignVendor);
 router.post('/announcements', createAnnouncement);
 router.get('/announcements', listAnnouncements);
 router.patch('/announcements/:id/toggle', toggleAnnouncement);

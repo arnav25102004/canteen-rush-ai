@@ -31,11 +31,27 @@ export async function assignVendorToCanteen(req: AuthRequest, res: Response) {
   const vendor = await prisma.user.findUnique({ where: { id: vendorId }, select: { role: true } });
   if (vendor?.role !== UserRole.VENDOR) return res.status(400).json({ error: 'User is not a vendor' });
 
-  const canteen = await prisma.canteen.update({
-    where: { id: canteenId },
-    data: { vendorId },
+  const target = await prisma.canteen.findUnique({ where: { id: canteenId }, select: { id: true } });
+  if (!target) return res.status(404).json({ error: 'Canteen not found' });
+
+  // A vendor runs one canteen (vendorId is unique), so move them off any other
+  // canteen first. If the target canteen already has a vendor, they are replaced.
+  const canteen = await prisma.$transaction(async (tx) => {
+    await tx.canteen.updateMany({ where: { vendorId, id: { not: canteenId } }, data: { vendorId: null } });
+    return tx.canteen.update({ where: { id: canteenId }, data: { vendorId } });
   });
   return res.json({ canteen });
+}
+
+export async function unassignVendor(req: AuthRequest, res: Response) {
+  const { vendorId, canteenId } = req.body as { vendorId?: string; canteenId?: string };
+  if (!vendorId && !canteenId) return res.status(400).json({ error: 'vendorId or canteenId required' });
+
+  const result = await prisma.canteen.updateMany({
+    where: vendorId ? { vendorId } : { id: canteenId },
+    data: { vendorId: null },
+  });
+  return res.json({ unassigned: result.count });
 }
 
 export async function createAnnouncement(req: AuthRequest, res: Response) {
