@@ -526,6 +526,7 @@ model Feedback {
   duplicateOfId        String?            @map("duplicate_of_id")
   changelogEntryId     String?            @map("changelog_entry_id")
   editCount            Int                @default(0) @map("edit_count")
+  voteCount            Int                @default(0) @map("vote_count") // +1 votes on APP_IDEA
   firstSeenAt          DateTime?          @map("first_seen_at")
   slaDueAt             DateTime?          @map("sla_due_at")
   resolvedAt           DateTime?          @map("resolved_at")
@@ -544,6 +545,7 @@ model Feedback {
   events         FeedbackEvent[]
   reports        FeedbackReport[]
   reveals        FeedbackIdentityReveal[]
+  votes          FeedbackIdeaVote[]
 
   @@unique([userId, clientRequestId])
   @@index([institutionId, status, createdAt])
@@ -561,6 +563,7 @@ model FeedbackAttachment {
   publicId   String?          @map("public_id")
   mimeType   String?          @map("mime_type")
   sizeBytes  Int?             @map("size_bytes")
+  kind       String           @default("PHOTO") // PHOTO | SCREENSHOT
   status     AttachmentStatus @default(PENDING)
   createdAt  DateTime         @default(now()) @map("created_at")
 
@@ -568,6 +571,17 @@ model FeedbackAttachment {
 
   @@index([feedbackId])
   @@map("feedback_attachments")
+}
+
+model FeedbackIdeaVote {
+  feedbackId String   @map("feedback_id")
+  userId     String   @map("user_id")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@id([feedbackId, userId])
+  @@map("feedback_idea_votes")
 }
 
 // Audit trail and timeline. Internal events are never shown to the user or vendor.

@@ -20,7 +20,7 @@ const VIEWS: { key: string; label: string; params: Record<string, string> }[] = 
 
 const FILTER_KEYS = [
   'kind', 'status', 'priority', 'tag', 'canteenId', 'minRating', 'maxRating', 'from', 'to',
-  'hasPhoto', 'anonymous', 'flagged', 'needsAttention', 'assignee',
+  'hasPhoto', 'anonymous', 'flagged', 'needsAttention', 'assignee', 'sort',
 ];
 
 const STATUS_STYLE: Record<string, string> = {
@@ -142,6 +142,9 @@ function InboxInner() {
           <select aria-label="Maximum rating" className={sel} value={sp.get('maxRating') || ''} onChange={(e) => setParam({ maxRating: e.target.value })}>
             <option value="">Max rating</option>{[1, 2, 3, 4, 5].map((n) => <option key={n} value={n}>up to {n}★</option>)}
           </select>
+          <select aria-label="Sort" className={sel} value={sp.get('sort') || ''} onChange={(e) => setParam({ sort: e.target.value })}>
+            <option value="">Newest first</option><option value="votes">Most votes</option>
+          </select>
           <input aria-label="Tag" placeholder="Tag" className={`${sel} w-28`} value={sp.get('tag') || ''} onChange={(e) => setParam({ tag: e.target.value.trim() })} />
           <label className="text-xs text-gray-500">From (IST)
             <input type="date" className={`${sel} block`} value={sp.get('from') || ''} onChange={(e) => setParam({ from: e.target.value })} />
@@ -164,7 +167,7 @@ function InboxInner() {
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-left text-gray-500">
               <tr>
-                {['Age', 'Kind', 'Canteen', 'Rating', 'Tags', 'Feedback', 'Status', 'Assignee', 'Priority'].map((h) => (
+                {['Age', 'Kind', 'Canteen', 'Rating', 'Tags', 'Feedback', 'Votes', 'Status', 'Assignee', 'Priority'].map((h) => (
                   <th key={h} className="px-4 py-3 font-medium whitespace-nowrap">{h}</th>
                 ))}
               </tr>
@@ -180,6 +183,7 @@ function InboxInner() {
                   <td className="px-4 py-3 whitespace-nowrap">{r.overallRating ? `${r.overallRating}★` : '—'}</td>
                   <td className="px-4 py-3"><div className="flex flex-wrap gap-1">{r.tags.map((t: string) => <span key={t} className="px-1.5 py-0.5 rounded bg-gray-100 text-xs">{t}</span>)}</div></td>
                   <td className="px-4 py-3 max-w-xs truncate text-gray-700">{r.snippet || <span className="text-gray-400">No text</span>}{r.photoCount > 0 && ' 📷'}</td>
+                  <td className="px-4 py-3 whitespace-nowrap">{r.kind === 'APP_IDEA' ? `▲ ${r.voteCount ?? 0}` : <span className="text-gray-300">—</span>}</td>
                   <td className="px-4 py-3"><span className={`px-2 py-0.5 rounded-full text-xs font-semibold ${STATUS_STYLE[r.status]}`}>{label(r.status)}</span></td>
                   <td className="px-4 py-3">{r.assigneeName || <span className="text-gray-400">—</span>}</td>
                   <td className={`px-4 py-3 ${PRIORITY_STYLE[r.priority]}`}>{label(r.priority)}</td>
@@ -268,6 +272,32 @@ function Drawer({ id, meId, onClose, onChanged }: { id: string; meId: string; on
 
             {fb.tags.length > 0 && <div className="flex flex-wrap gap-1">{fb.tags.map((t: string) => <span key={t} className="px-2 py-0.5 rounded bg-gray-100 text-xs">{t}</span>)}</div>}
             <p className="whitespace-pre-wrap text-gray-800">{fb.body || <span className="text-gray-400">No text</span>}</p>
+
+            {fb.kind === 'APP_IDEA' && <p className="text-sm text-gray-600">▲ {fb.voteCount ?? 0} votes</p>}
+
+            {fb.attachments?.length > 0 && (
+              <div>
+                <h3 className="font-semibold text-sm mb-1">Photos</h3>
+                <p className="text-xs text-gray-500 mb-2">Only you can see photos until you approve them. Vendors see approved photos only.</p>
+                <div className="flex flex-wrap gap-3">
+                  {fb.attachments.map((a: any) => (
+                    <div key={a.id} className="w-28">
+                      {a.status === 'REJECTED'
+                        ? <div className="w-28 h-28 rounded-lg bg-gray-100 text-gray-400 text-xs flex items-center justify-center">Removed</div>
+                        // eslint-disable-next-line @next/next/no-img-element
+                        : <a href={a.url} target="_blank" rel="noreferrer"><img src={a.url} alt="Attached photo" className="w-28 h-28 object-cover rounded-lg" /></a>}
+                      <p className="text-xs mt-1 text-gray-600">{label(a.status)}</p>
+                      <div className="flex gap-1 mt-1">
+                        <button disabled={busy || a.status === 'APPROVED'} onClick={() => run(() => api.post(`/admin/feedback/attachments/${a.id}/approve`))}
+                          className="px-2 py-0.5 rounded text-xs border border-green-300 text-green-700 disabled:opacity-40">Approve</button>
+                        <button disabled={busy || a.status === 'REJECTED'} onClick={() => run(() => api.post(`/admin/feedback/attachments/${a.id}/reject`))}
+                          className="px-2 py-0.5 rounded text-xs border border-red-300 text-red-700 disabled:opacity-40">Reject</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {fb.items.length > 0 && (
               <div>

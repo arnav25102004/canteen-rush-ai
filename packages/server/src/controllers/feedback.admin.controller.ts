@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { FeedbackKind, FeedbackPriority, FeedbackStatus } from '@prisma/client';
 import { AuthRequest, feedbackScope } from '../middleware/auth';
 import { AppError } from '../utils/errors';
+import { decideAttachment } from '../services/feedbackExtras.service';
 import { addNote, addReply, feedbackStats, getFeedbackDetail, listFeedback, updateFeedback } from '../services/feedbackAdmin.service';
 
 const idSchema = z.string().uuid();
@@ -26,6 +27,7 @@ const listQuery = z.object({
   flagged: bool.optional(),
   needsAttention: bool.optional(),
   assignee: z.string().max(40).optional(), // a user id, or 'me'
+  sort: z.enum(['recent', 'votes']).default('recent'),
   limit: z.coerce.number().int().min(1).max(100).default(25),
   cursor: z.string().max(200).optional(),
 });
@@ -90,4 +92,12 @@ export async function reply(req: AuthRequest, res: Response) {
   const scope = scopeOr403(req);
   const { text } = textBody.parse(req.body);
   return res.status(201).json(await addReply(scope, uuidParam(req.params.id), req.user!.id, text));
+}
+
+export async function approveAttachment(req: AuthRequest, res: Response) {
+  return res.json(await decideAttachment(scopeOr403(req), uuidParam(req.params.id), req.user!.id, 'APPROVED'));
+}
+
+export async function rejectAttachment(req: AuthRequest, res: Response) {
+  return res.json(await decideAttachment(scopeOr403(req), uuidParam(req.params.id), req.user!.id, 'REJECTED'));
 }

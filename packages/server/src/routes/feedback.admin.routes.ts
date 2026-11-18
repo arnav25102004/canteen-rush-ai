@@ -1,6 +1,6 @@
 import { Router } from '../utils/router';
 import { authenticate, requireFeedbackAdmin } from '../middleware/auth';
-import { list, stats, detail, patch, note, reply } from '../controllers/feedback.admin.controller';
+import { approveAttachment, rejectAttachment, list, stats, detail, patch, note, reply } from '../controllers/feedback.admin.controller';
 
 const router = Router();
 
@@ -9,6 +9,8 @@ router.use(authenticate, requireFeedbackAdmin);
 
 router.get('/', list);
 router.get('/stats', stats); // before '/:id'
+router.post('/attachments/:id/approve', approveAttachment);
+router.post('/attachments/:id/reject', rejectAttachment);
 router.get('/:id', detail);
 router.patch('/:id', patch);
 router.post('/:id/notes', note);

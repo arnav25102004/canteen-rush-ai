@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIndicator, Linking, Switch } from 'react-native';
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
 import { t } from '../../components/feedback/copy';
+import { getShakeEnabled, setShakeEnabled } from '../../services/shake';
 
 interface FavoriteItem { id: string; name: string; price: number; isVeg: boolean; canteen: { id: string; name: string } }
 
@@ -12,6 +13,14 @@ export default function ProfileScreen() {
   const router = useRouter();
   const [favorites, setFavorites] = useState<FavoriteItem[]>([]);
   const [loadingFavs, setLoadingFavs] = useState(true);
+  const [shake, setShake] = useState(false);
+
+  useEffect(() => { void getShakeEnabled().then(setShake); }, []);
+
+  function toggleShake(v: boolean) {
+    setShake(v);
+    void setShakeEnabled(v);
+  }
 
   useEffect(() => {
     api.get('/menu/favorites').then(r => setFavorites(r.data.favorites || [])).catch(() => null).finally(() => setLoadingFavs(false));
@@ -113,6 +122,17 @@ export default function ProfileScreen() {
           <Text style={styles.rowValue}>{t('profileChangelog')}</Text>
           <Text style={styles.favOrder}>→</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.row} onPress={() => router.push('/feedback/ideas')} accessibilityRole="button">
+          <Text style={styles.rowValue}>{t('profileIdeas')}</Text>
+          <Text style={styles.favOrder}>→</Text>
+        </TouchableOpacity>
+        <View style={styles.row}>
+          <View style={{ flex: 1, paddingRight: 12 }}>
+            <Text style={styles.rowValue}>{t('shakeTitle')}</Text>
+            {shake ? <Text style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{t('shakeConsent')}</Text> : null}
+          </View>
+          <Switch value={shake} onValueChange={toggleShake} accessibilityLabel={t('shakeTitle')} />
+        </View>
       </View>
 
       <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
