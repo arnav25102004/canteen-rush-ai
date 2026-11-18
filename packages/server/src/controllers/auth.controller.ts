@@ -136,7 +136,17 @@ export async function register(req: Request, res: Response) {
   const name: string = parse.data.name || (decoded as any).name || email.split('@')[0];
   const role = initialRoleFor(email);
 
-  const institution = await findInstitutionByEmail(email);
+  let institution = await findInstitutionByEmail(email);
+  // Allowlisted admins (ADMIN_EMAILS, set by the operator) may use a non-institution
+  // email; they attach to the oldest active institution. Everyone else still needs
+  // an institution email.
+  const adminFallback = !institution && role === UserRole.ADMIN;
+  if (adminFallback) {
+    institution = await prisma.institution.findFirst({
+      where: { isActive: true },
+      orderBy: { createdAt: 'asc' },
+    });
+  }
   if (!institution) {
     return res.status(400).json({
       error: 'Please use your institution email address to register.',
@@ -146,7 +156,7 @@ export async function register(req: Request, res: Response) {
   const existingByUid = await prisma.user.findUnique({ where: { firebaseUid: decoded.uid } });
   if (existingByUid) return res.status(409).json({ error: 'User already registered' });
 
-  const department = extractDepartment(email);
+  const department = adminFallback ? null : extractDepartment(email);
 
   // Existing row with this email (e.g. seeded): safe to link because the token
   // proves ownership of the inbox. Role is left untouched.
