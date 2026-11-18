@@ -1,7 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator, Alert, AppState } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import api from '../../services/api';
+import { getCapabilities } from '../../services/assistant';
 import { useCartStore } from '../../store/cartStore';
 import { useAuthStore } from '../../store/authStore';
 
@@ -25,6 +26,7 @@ export default function HomeScreen() {
   const [search, setSearch] = useState('');
   const [lastOrder, setLastOrder] = useState<LastOrder | null>(null);
   const [loading, setLoading] = useState(true);
+  const [assistantOn, setAssistantOn] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function fetchCanteens() {
@@ -59,6 +61,13 @@ export default function HomeScreen() {
     if (!search) { setFiltered(canteens); return; }
     setFiltered(canteens.filter(c => c.name.toLowerCase().includes(search.toLowerCase())));
   }, [search, canteens]);
+
+  // The button shows only when the server says the assistant is enabled (hidden on 404 or any error).
+  useFocusEffect(useCallback(() => {
+    let live = true;
+    getCapabilities().then(c => { if (live) setAssistantOn(!!c.enabled); }).catch(() => { if (live) setAssistantOn(false); });
+    return () => { live = false; };
+  }, []));
 
   function reorderLast() {
     if (!lastOrder) return;
@@ -141,11 +150,18 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
       />
+      {assistantOn && (
+        <TouchableOpacity style={styles.fab} onPress={() => router.push('/assistant')} accessibilityRole="button" accessibilityLabel="Order with assistant">
+          <Text style={styles.fabText}>Order with assistant</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  fab: { position: 'absolute', right: 16, bottom: 20, backgroundColor: '#e94560', borderRadius: 28, paddingHorizontal: 18, paddingVertical: 14, elevation: 6 },
+  fabText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   container: { flex: 1, backgroundColor: '#f8f9fa' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   instBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a2e', paddingHorizontal: 16, paddingVertical: 12 },
