@@ -78,6 +78,7 @@ export function requireRole(...roles: UserRole[]) {
 
 export const requireVendor = requireRole(UserRole.VENDOR, UserRole.ADMIN);
 export const requireAdmin = requireRole(UserRole.ADMIN);
+export const requireCustomer = requireRole(UserRole.STUDENT, UserRole.FACULTY);
 
 // Attaches user if token present but does not reject unauthenticated requests
 export async function optionalAuthenticate(req: AuthRequest, res: Response, next: NextFunction) {

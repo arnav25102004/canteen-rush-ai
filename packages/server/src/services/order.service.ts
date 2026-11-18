@@ -62,13 +62,46 @@ export function decidePayment(totalAmount: number, canteenHasRazorpay: boolean) 
   return { paymentMethod: 'CASH' as const, paymentStatus: 'AWAITING_PAYMENT' as const, status: OrderStatus.CONFIRMED };
 }
 
-export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<PlaceOrderResult> {
-  const { userId, userRole, canteenId, slotId, items, specialInstructions, pointsToRedeem = 0 } = input;
+export interface OrderDraft {
+  userRole: UserRole;
+  canteenId: string;
+  slotId?: string | null;
+  items: Array<{ menuItemId: string; quantity: number; customizations?: Record<string, unknown>; notes?: string }>;
+  /** When set, the canteen must belong to this institution (used by the assistant). */
+  institutionId?: string;
+}
+
+export interface OrderQuote {
+  canteen: { id: string; name: string; isActive: boolean; razorpayAccountId: string | null; institutionId: string };
+  slot: { id: string; date: Date; startTime: string; endTime: string } | null;
+  slotCap: number;
+  lines: Array<{
+    menuItemId: string;
+    name: string;
+    isVeg: boolean;
+    quantity: number;
+    unitPrice: number;
+    totalPrice: number;
+    counterUnitPrice: number;
+    customizations: Record<string, unknown>;
+    notes?: string;
+  }>;
+  subtotal: number;
+  totalCounterPrice: number;
+}
+
+/**
+ * Read-only validation and pricing of an order draft: items, canteen, slot rules and
+ * DB prices. Throws the same AppErrors placeOrder always has. Writes nothing.
+ */
+export async function quoteOrder(draft: OrderDraft): Promise<OrderQuote> {
+  const { userRole, canteenId, items } = draft;
+  const slotId = draft.slotId ?? undefined;
 
   // Validate items belong to this canteen and are available
   const menuItems = await prisma.menuItem.findMany({
     where: { id: { in: items.map((i) => i.menuItemId) }, canteenId },
-    select: { id: true, name: true, price: true, counterPrice: true, isAvailable: true },
+    select: { id: true, name: true, price: true, counterPrice: true, isAvailable: true, isVeg: true },
   });
 
   if (menuItems.length !== new Set(items.map((i) => i.menuItemId)).size) {
@@ -82,13 +115,15 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
 
   const canteen = await prisma.canteen.findUnique({
     where: { id: canteenId },
-    select: { id: true, name: true, isActive: true, razorpayAccountId: true },
+    select: { id: true, name: true, isActive: true, razorpayAccountId: true, institutionId: true },
   });
   if (!canteen || !canteen.isActive) throw new AppError(404, 'Canteen not found');
+  if (draft.institutionId && canteen.institutionId !== draft.institutionId) throw new AppError(404, 'Canteen not found');
 
   // Slot rules: same canteen, not past the cutoff, and capacity left for this user's role.
   // Faculty may also use the faculty-reserved seats; students may not.
   let slotCap = 0;
+  let slotInfo: OrderQuote['slot'] = null;
   if (slotId) {
     const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
     if (!slot || slot.canteenId !== canteenId || !slot.isOpen) {
@@ -100,16 +135,13 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     const isFaculty = userRole === UserRole.FACULTY || userRole === UserRole.ADMIN;
     slotCap = slot.maxOrders - slot.walkInReserved - (isFaculty ? 0 : slot.facultyReserved);
     if (slot.currentOrders >= slotCap) throw new AppError(400, 'This time slot is full. Please choose another slot.');
+    slotInfo = { id: slot.id, date: slot.date, startTime: slot.startTime, endTime: slot.endTime };
   }
-
-  const pointsValidation = await validatePointsRedemption(userId, pointsToRedeem);
-  if (!pointsValidation.valid) throw new AppError(400, pointsValidation.error || 'Invalid points redemption');
-  const pointsDiscount = pointsValidation.discountAmount;
 
   // Prices always come from the DB, never the client
   let subtotal = 0;
   let totalCounterPrice = 0;
-  const orderItems = items.map((item) => {
+  const lines = items.map((item) => {
     const mi = menuItems.find((m) => m.id === item.menuItemId)!;
     const appPrice = Number(mi.price);
     const counterPrice = Number(mi.counterPrice ?? mi.price);
@@ -118,13 +150,62 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     totalCounterPrice += counterPrice * item.quantity;
     return {
       menuItemId: item.menuItemId,
+      name: mi.name,
+      isVeg: mi.isVeg,
       quantity: item.quantity,
       unitPrice: appPrice,
       totalPrice,
-      customizations: item.customizations ?? {},
+      counterUnitPrice: counterPrice,
+      customizations: (item.customizations ?? {}) as Record<string, unknown>,
       notes: item.notes,
     };
   });
+
+  return { canteen, slot: slotInfo, slotCap, lines, subtotal, totalCounterPrice };
+}
+
+/** Throws 403 while the user is temporarily blocked from ordering after repeated no-shows. */
+export async function assertNotStrikeBanned(userId: string): Promise<void> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { orderStrikes: true, strikeBannedUntil: true },
+  });
+  if (user?.strikeBannedUntil && user.strikeBannedUntil > new Date()) {
+    const until = user.strikeBannedUntil.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
+    throw new AppError(403, `You've been temporarily blocked from ordering after repeated no-shows until ${until}.`);
+  }
+}
+
+/** Most recent non-cancelled orders for a user, newest first, with canteen and item details. */
+export async function findRecentOrdersForUser(userId: string, limit: number) {
+  return prisma.order.findMany({
+    where: { userId, status: { notIn: [OrderStatus.CANCELLED] } },
+    orderBy: { createdAt: 'desc' },
+    take: limit,
+    include: {
+      canteen: { select: { id: true, name: true, imageUrl: true, isActive: true } },
+      items: { include: { menuItem: { select: { id: true, name: true, imageUrl: true, price: true, isAvailable: true, isVeg: true } } } },
+    },
+  });
+}
+
+export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<PlaceOrderResult> {
+  const { userId, userRole, canteenId, slotId, items, specialInstructions, pointsToRedeem = 0 } = input;
+
+  const quote = await quoteOrder({ userRole, canteenId, slotId, items });
+  const { canteen, slotCap, subtotal, totalCounterPrice } = quote;
+  const orderItems = quote.lines.map((l) => ({
+    menuItemId: l.menuItemId,
+    quantity: l.quantity,
+    unitPrice: l.unitPrice,
+    totalPrice: l.totalPrice,
+    customizations: l.customizations,
+    notes: l.notes,
+  }));
+
+  const pointsValidation = await validatePointsRedemption(userId, pointsToRedeem);
+  if (!pointsValidation.valid) throw new AppError(400, pointsValidation.error || 'Invalid points redemption');
+  const pointsDiscount = pointsValidation.discountAmount;
 
   if (pointsDiscount > subtotal) throw new AppError(400, 'Points discount is larger than the order total');
 
