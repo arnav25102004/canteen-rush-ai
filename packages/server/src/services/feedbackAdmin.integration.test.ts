@@ -31,8 +31,8 @@ describe.skipIf(!url)('admin feedback (Postgres)', async () => {
   }
 
   beforeAll(async () => {
-    const inst = await prisma.institution.create({ data: { name: tag, slug: tag } as any });
-    const other = await prisma.institution.create({ data: { name: `${tag}o`, slug: `${tag}o` } as any });
+    const inst = await prisma.institution.create({ data: { name: tag, slug: tag, emailDomain: `${tag}.edu` } as any });
+    const other = await prisma.institution.create({ data: { name: `${tag}o`, slug: `${tag}o`, emailDomain: `${tag}o.edu` } as any });
     instId = inst.id; otherInstId = other.id;
     const mk = (role: string, n: string, institutionId = instId) => prisma.user.create({
       data: { firebaseUid: `${tag}-${n}`, email: `${tag}-${n}@t.in`, name: n, role, institutionId } as any,
