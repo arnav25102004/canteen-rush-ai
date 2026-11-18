@@ -191,7 +191,7 @@ const NavigationBarItem = React.memo(function NavigationBarItem({
         {/* Contact-anchored M3 Expressive Euclidean Ripple */}
         <ExpressiveRipple
           ref={rippleRef}
-          width={56}
+          width={64}
           height={32}
           borderRadius={16}
           color={isFocused ? onIndicatorColor : activeColor}
@@ -266,7 +266,7 @@ export const ExpressiveNavigationBar: React.FC<ExpressiveNavigationBarProps> = R
           {
             backgroundColor: colors.surfaceContainer,
             borderTopColor: colors.outlineVariant,
-            paddingBottom: Math.max(insets.bottom, 6),
+            paddingBottom: insets.bottom,
           },
         ]}
       >
@@ -339,31 +339,32 @@ export const ExpressiveNavigationBar: React.FC<ExpressiveNavigationBarProps> = R
 
 const styles = StyleSheet.create({
   container: {
-    // M3 Expressive Spec: 64dp container height + safe area bottom padding
+    // Official M3 Navigation Bar specification: 80dp content + safe area bottom padding
     borderTopWidth: StyleSheet.hairlineWidth,
-    elevation: 8,
+    elevation: 4,
     shadowColor: '#000000',
     shadowOffset: { width: 0, height: -2 },
-    shadowOpacity: 0.06,
+    shadowOpacity: 0.05,
     shadowRadius: 6,
   },
   contentRow: {
-    height: 64, // M3 Expressive short navigation bar height specification
+    height: 80, // Full 80dp M3 NavigationBar height specification
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
     paddingHorizontal: 8,
+    paddingTop: 8,
+    paddingBottom: 10,
   },
   itemContainer: {
     flex: 1,
-    height: 64,
+    height: '100%',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 4,
   },
   pillWrapper: {
-    width: 56, // M3 Expressive indicator pill width
-    height: 32, // M3 Expressive indicator pill height
+    width: 64, // M3 standard active pill width (64dp)
+    height: 32, // M3 active pill height (32dp)
     borderRadius: 16,
     alignItems: 'center',
     justifyContent: 'center',
@@ -382,7 +383,8 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   label: {
-    fontSize: 11,
+    fontSize: 12,
+    fontWeight: '500',
     letterSpacing: 0.2,
     marginTop: 4,
     textAlign: 'center',
