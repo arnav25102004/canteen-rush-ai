@@ -1,5 +1,6 @@
 import { Request, Response, NextFunction } from 'express';
 import { Prisma } from '@prisma/client';
+import { ZodError } from 'zod';
 import { logger } from '../utils/logger';
 import { AppError } from '../utils/errors';
 
@@ -20,8 +21,15 @@ export function globalErrorHandler(err: any, req: Request, res: Response, _next:
   if (err instanceof Prisma.PrismaClientValidationError) {
     return res.status(400).json({ error: 'Invalid request' });
   }
+  if (err instanceof ZodError) {
+    return res.status(400).json({
+      error: 'Invalid request',
+      code: 'VALIDATION',
+      issues: err.issues.map((i) => ({ path: i.path.join('.'), message: i.message })),
+    });
+  }
   if (err instanceof AppError) {
-    return res.status(err.status).json({ error: err.message });
+    return res.status(err.status).json({ error: err.message, ...(err.code ? { code: err.code } : {}), ...(err.extra ?? {}) });
   }
 
   const status = err.status || err.statusCode || 500;

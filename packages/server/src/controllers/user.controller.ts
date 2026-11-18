@@ -3,6 +3,7 @@ import { prisma } from '../config/database';
 import { deleteFirebaseUser } from '../config/firebase';
 import { AuthRequest } from '../middleware/auth';
 import { logger } from '../utils/logger';
+import { anonymiseUserFeedback } from '../services/feedback.service';
 
 // DPDPA-style deletion: anonymise rather than hard-delete. Orders reference
 // this user for vendor settlement/dispute records, so the row must survive —
@@ -17,7 +18,9 @@ export async function deleteAccount(req: AuthRequest, res: Response) {
       // the account is gone — delete them outright.
       await tx.notification.deleteMany({ where: { userId } });
       await tx.favorite.deleteMany({ where: { userId } });
-      await tx.rating.deleteMany({ where: { userId } });
+      // Ratings and feedback are anonymised, not deleted: the numbers stay so item and
+      // canteen averages remain correct; the link to the person and any free text go.
+      await anonymiseUserFeedback(tx, userId);
 
       const loyaltyAccount = await tx.loyaltyAccount.findUnique({ where: { userId } });
       if (loyaltyAccount) {
