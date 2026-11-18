@@ -39,7 +39,7 @@ describe.skipIf(!url)('admin feedback (Postgres)', async () => {
     });
     adminId = (await mk('ADMIN', 'admin')).id;
     studentId = (await mk('STUDENT', 'student')).id;
-    canteenId = (await prisma.canteen.create({ data: { name: tag, institutionId: instId } as any })).id;
+    canteenId = (await prisma.canteen.create({ data: { name: tag, campus: "C", openingTime: "07:00", closingTime: "20:00", institutionId: instId } as any })).id;
   });
 
   afterAll(async () => {
