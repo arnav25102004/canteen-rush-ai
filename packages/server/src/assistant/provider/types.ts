@@ -23,6 +23,8 @@ export interface ProviderRequest {
   model: string;
   messages: ChatMessage[];
   tools?: ToolDef[];
+  /** 'none' keeps the tool definitions (earlier tool messages stay valid) but forbids new calls. */
+  toolChoice?: 'auto' | 'none';
   maxTokens: number;
   reasoningEffort?: 'low' | 'medium' | 'high';
   timeoutMs: number;
