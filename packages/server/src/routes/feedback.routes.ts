@@ -1,11 +1,12 @@
 import { Router } from '../utils/router';
 import { authenticate } from '../middleware/auth';
 import { userLimiter } from '../middleware/rateLimit';
-import { eligibility, createOrder, update, remove, mine, getOne } from '../controllers/feedback.controller';
+import { eligibility, createOrder, update, remove, mine, getOne, report } from '../controllers/feedback.controller';
 
 const router = Router();
 
 const createLimiter = userLimiter('feedback-create', 60 * 60 * 1000, 10);
+const reportLimiter = userLimiter('feedback-report', 24 * 60 * 60 * 1000, 20);
 const editLimiter = userLimiter('feedback-edit', 60 * 60 * 1000, 20);
 
 // Fixed paths first so '/mine' is not read as an :id.
@@ -15,5 +16,6 @@ router.post('/order', authenticate, createLimiter, createOrder);
 router.get('/:id', authenticate, getOne);
 router.patch('/:id', authenticate, editLimiter, update);
 router.delete('/:id', authenticate, editLimiter, remove);
+router.post('/:id/report', authenticate, reportLimiter, report);
 
 export default router;

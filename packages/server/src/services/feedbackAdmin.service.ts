@@ -9,7 +9,7 @@ import { notifyUser } from './notification.service';
 /** What feedbackScope(req) returns for an admin. Spread last into every where so a filter can never widen it. */
 export type AdminScope = { institutionId?: string; canteenId?: string };
 
-const CLOSED: FeedbackStatus[] = [FeedbackStatus.RESOLVED, FeedbackStatus.WONT_FIX, FeedbackStatus.DUPLICATE];
+export const CLOSED: FeedbackStatus[] = [FeedbackStatus.RESOLVED, FeedbackStatus.WONT_FIX, FeedbackStatus.DUPLICATE];
 const OPEN: FeedbackStatus[] = [FeedbackStatus.RECEIVED, FeedbackStatus.SEEN, FeedbackStatus.IN_PROGRESS];
 const REASON_REQUIRED: FeedbackStatus[] = [FeedbackStatus.WONT_FIX, FeedbackStatus.DUPLICATE];
 export const NOTE_MAX = 2000;
@@ -95,7 +95,7 @@ export function buildListWhere(scope: AdminScope, f: ListFilters): Prisma.Feedba
   return { ...where, ...scope };
 }
 
-function snippet(body: string | null): string | null {
+export function snippet(body: string | null): string | null {
   if (!body) return null;
   const s = body.replace(/\s+/g, ' ').trim();
   return s.length > 140 ? `${s.slice(0, 140)}…` : s;
@@ -159,7 +159,7 @@ const STATUS_COPY: Partial<Record<FeedbackStatus, string>> = {
   DUPLICATE: 'Your feedback matches one we already have. Thank you!',
 };
 
-async function notifyStatus(fb: { id: string; userId: string | null }, to: FeedbackStatus) {
+export async function notifyStatus(fb: { id: string; userId: string | null }, to: FeedbackStatus) {
   const body = STATUS_COPY[to];
   if (!body) return;
   await tryNotify(fb.userId, {

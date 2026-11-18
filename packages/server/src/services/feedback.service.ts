@@ -243,6 +243,8 @@ export async function updateOrderReview(userId: string, id: string, input: Updat
     throw new AppError(403, 'Reviews can only be edited within 24 hours', 'EDIT_WINDOW_CLOSED');
   }
   if (fb.editCount >= MAX_EDITS) throw new AppError(403, 'Edit limit reached', 'EDIT_LIMIT');
+  // A hidden review is out of the aggregates; editing it would re-add deltas and reset its moderation.
+  if (fb.moderation === FeedbackModeration.HIDDEN) throw new AppError(403, 'This review can no longer be edited', 'REVIEW_HIDDEN');
 
   const orderId = fb.orderId;
   const canteenId = fb.canteenId;
@@ -305,8 +307,11 @@ export async function deleteOrderReview(userId: string, id: string, now = new Da
     if (res.count !== 1) throw new AppError(404, 'Feedback not found');
 
     const fb = await tx.feedback.findUniqueOrThrow({ where: { id }, include: { ratings: true } });
-    for (const r of fb.ratings) await applyItemDelta(tx, r.menuItemId, -r.rating, -1);
-    if (fb.canteenId && fb.overallRating != null) await applyCanteenDelta(tx, fb.canteenId, -fb.overallRating, -1);
+    // A hidden review already left the aggregates when it was hidden: do not subtract it twice.
+    if (fb.moderation !== FeedbackModeration.HIDDEN) {
+      for (const r of fb.ratings) await applyItemDelta(tx, r.menuItemId, -r.rating, -1);
+      if (fb.canteenId && fb.overallRating != null) await applyCanteenDelta(tx, fb.canteenId, -fb.overallRating, -1);
+    }
     // Drop the per-item rows so the order can be reviewed again (unique on user, order, item).
     await tx.rating.deleteMany({ where: { feedbackId: id } });
   });

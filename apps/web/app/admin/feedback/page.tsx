@@ -60,6 +60,14 @@ function InboxInner() {
   const [canteens, setCanteens] = useState<any[]>([]);
   const [selected, setSelected] = useState<string | null>(null);
   const [meId, setMeId] = useState('');
+  const [tab, setTab] = useState<'inbox' | 'reports'>('inbox');
+  const [checked, setChecked] = useState<Set<string>>(new Set());
+  const [bulkAction, setBulkAction] = useState('');
+  const [bulkValue, setBulkValue] = useState('');
+  const [bulkReason, setBulkReason] = useState('');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const [bulkMsg, setBulkMsg] = useState('');
+  const [exporting, setExporting] = useState(false);
 
   const query = sp.toString();
 
@@ -96,6 +104,48 @@ function InboxInner() {
     setMeId(localStorage.getItem('user_id') || '');
   }, []);
 
+  // Selection only makes sense for the rows currently on screen.
+  useEffect(() => { setChecked(new Set()); }, [query]);
+
+  const toggle = (id: string) => setChecked((prev) => { const n = new Set(prev); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const allChecked = rows.length > 0 && rows.every((r) => checked.has(r.id));
+  const bulkNeedsReason = bulkAction === 'HIDE' || (bulkAction === 'SET_STATUS' && bulkValue === 'WONT_FIX');
+  const bulkReady = !!bulkAction && !bulkBusy && checked.size > 0
+    && (bulkAction === 'HIDE' || bulkAction === 'ASSIGN' || !!bulkValue)
+    && (!bulkNeedsReason || bulkReason.trim().length >= 3);
+
+  async function runBulk() {
+    setBulkBusy(true); setBulkMsg(''); setError('');
+    try {
+      const value = bulkAction === 'ASSIGN' ? (bulkValue === 'me' ? meId : null) : bulkAction === 'HIDE' ? undefined : bulkValue;
+      const { data } = await api.post('/admin/feedback/bulk', {
+        ids: [...checked], action: bulkAction, ...(value !== undefined ? { value } : {}), ...(bulkReason.trim() ? { reason: bulkReason.trim() } : {}),
+      });
+      const failed = (data.results as any[]).filter((r) => !r.ok);
+      setBulkMsg(`${data.applied} updated${failed.length ? `, ${failed.length} skipped: ${[...new Set(failed.map((f) => f.error))].join('; ')}` : ''}`);
+      setChecked(new Set(failed.map((f) => f.id)));
+      setBulkReason('');
+      await load(null);
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Bulk update failed.');
+    } finally { setBulkBusy(false); }
+  }
+
+  async function exportCsv() {
+    setExporting(true); setError('');
+    try {
+      // The file needs the auth header, so fetch it as a blob and save it from the browser.
+      const res = await api.get('/admin/feedback/export.csv', { params: apiParams, responseType: 'blob' });
+      const name = /filename="([^"]+)"/.exec(res.headers['content-disposition'] || '')?.[1] || 'feedback.csv';
+      const url = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = url; a.download = name; a.click();
+      URL.revokeObjectURL(url);
+    } catch (e: any) {
+      setError(e?.response?.status === 429 ? 'Export limit reached (5 per hour). Try again later.' : 'Export failed.');
+    } finally { setExporting(false); }
+  }
+
   function applyView(params: Record<string, string>) {
     const next = new URLSearchParams();
     for (const [k, v] of Object.entries(params)) next.set(k, v);
@@ -111,8 +161,26 @@ function InboxInner() {
     <div className="flex min-h-screen">
       <Sidebar />
       <main className="flex-1 p-8 bg-gray-50 min-w-0">
-        <h1 className="text-2xl font-bold text-gray-800 mb-4">Feedback</h1>
+        <div className="flex flex-wrap items-center gap-3 mb-4">
+          <h1 className="text-2xl font-bold text-gray-800">Feedback</h1>
+          <div className="flex gap-1 ml-4" role="tablist">
+            {(['inbox', 'reports'] as const).map((t) => (
+              <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)}
+                className={`px-3 py-1.5 rounded-lg text-sm font-semibold ${tab === t ? 'bg-[#1a1a2e] text-white' : 'bg-white text-gray-600 border'}`}>
+                {t === 'inbox' ? 'Inbox' : 'Reports'}
+              </button>
+            ))}
+          </div>
+          {tab === 'inbox' && (
+            <button onClick={exportCsv} disabled={exporting} className="ml-auto px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-300 bg-white disabled:opacity-40">
+              {exporting ? 'Exporting...' : 'Export CSV'}
+            </button>
+          )}
+        </div>
 
+        {tab === 'reports' && <ReportsTab />}
+
+        {tab === 'inbox' && (<>
         <div className="flex flex-wrap gap-2 mb-4">
           {VIEWS.map((v) => (
             <button key={v.key} onClick={() => applyView(v.params)}
@@ -158,11 +226,49 @@ function InboxInner() {
         </div>
 
         {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+        {bulkMsg && <p className="mb-3 text-sm text-green-700" role="status">{bulkMsg}</p>}
+
+        {checked.size > 0 && (
+          <div className="flex flex-wrap items-center gap-2 mb-3 bg-white rounded-xl shadow-sm p-3 border border-[#e94560]">
+            <span className="text-sm font-semibold">{checked.size} selected</span>
+            <select aria-label="Bulk action" className={sel} value={bulkAction} onChange={(e) => { setBulkAction(e.target.value); setBulkValue(''); }}>
+              <option value="">Action...</option>
+              <option value="SET_STATUS">Set status</option><option value="ASSIGN">Assign</option>
+              <option value="SET_PRIORITY">Set priority</option><option value="HIDE">Hide</option>
+            </select>
+            {bulkAction === 'SET_STATUS' && (
+              <select aria-label="Bulk status" className={sel} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>
+                <option value="">Status...</option>{STATUSES.filter((s) => s !== 'DUPLICATE').map((s) => <option key={s} value={s}>{label(s)}</option>)}
+              </select>
+            )}
+            {bulkAction === 'SET_PRIORITY' && (
+              <select aria-label="Bulk priority" className={sel} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>
+                <option value="">Priority...</option>{PRIORITIES.map((s) => <option key={s} value={s}>{label(s)}</option>)}
+              </select>
+            )}
+            {bulkAction === 'ASSIGN' && (
+              <select aria-label="Bulk assignee" className={sel} value={bulkValue} onChange={(e) => setBulkValue(e.target.value)}>
+                <option value="">Unassign</option><option value="me">Assign to me</option>
+              </select>
+            )}
+            {bulkNeedsReason && (
+              <input aria-label="Reason" placeholder="Reason (required)" maxLength={500} className={`${sel} w-56`} value={bulkReason} onChange={(e) => setBulkReason(e.target.value)} />
+            )}
+            <button disabled={!bulkReady} onClick={runBulk} className="px-4 py-1.5 rounded-lg text-sm font-semibold bg-[#e94560] text-white disabled:opacity-40">
+              {bulkBusy ? 'Applying...' : 'Apply'}
+            </button>
+            <button onClick={() => setChecked(new Set())} className="text-sm text-gray-500 underline ml-auto">Clear selection</button>
+          </div>
+        )}
 
         <div className="bg-white rounded-xl shadow-sm overflow-x-auto">
           <table className="w-full text-sm">
             <thead className="bg-gray-50 text-left text-gray-500">
               <tr>
+                <th className="px-4 py-3 w-8">
+                  <input type="checkbox" aria-label="Select all on this page" checked={allChecked}
+                    onChange={() => setChecked(allChecked ? new Set() : new Set(rows.slice(0, 100).map((r) => r.id)))} />
+                </th>
                 {['Age', 'Kind', 'Canteen', 'Rating', 'Tags', 'Feedback', 'Status', 'Assignee', 'Priority'].map((h) => (
                   <th key={h} className="px-4 py-3 font-medium whitespace-nowrap">{h}</th>
                 ))}
@@ -171,6 +277,9 @@ function InboxInner() {
             <tbody className="divide-y">
               {rows.map((r) => (
                 <tr key={r.id} onClick={() => setSelected(r.id)} className="cursor-pointer hover:bg-gray-50">
+                  <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    <input type="checkbox" aria-label="Select feedback" checked={checked.has(r.id)} onChange={() => toggle(r.id)} />
+                  </td>
                   <td className="px-4 py-3">
                     <span title={r.slaDueAt ? `SLA due ${new Date(r.slaDueAt).toLocaleString()}` : ''} className={`px-2 py-0.5 rounded-full text-xs font-semibold ${ageClass(r)}`}>{ageLabel(r.createdAt)}</span>
                   </td>
@@ -192,12 +301,70 @@ function InboxInner() {
         {cursor && !loading && (
           <button onClick={() => load(cursor)} className="mt-4 px-4 py-2 rounded-lg text-sm font-semibold border border-gray-300 bg-white">Load more</button>
         )}
+        </>)}
       </main>
 
       {selected && (
         <Drawer id={selected} meId={meId} onClose={() => setSelected(null)}
           onChanged={(row) => setRows((prev) => prev.map((r) => (r.id === row.id ? { ...r, ...row } : r)))} />
       )}
+    </div>
+  );
+}
+
+function ReportsTab() {
+  const [reports, setReports] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+  const [busyId, setBusyId] = useState('');
+  const [reasons, setReasons] = useState<Record<string, string>>({});
+
+  const load = useCallback(async () => {
+    setLoading(true); setError('');
+    try { setReports((await api.get('/admin/feedback/reports')).data.reports); }
+    catch (e: any) { setError(e?.response?.data?.error || 'Could not load reports.'); }
+    finally { setLoading(false); }
+  }, []);
+  useEffect(() => { load(); }, [load]);
+
+  async function act(r: any, action: 'HIDE' | 'FLAG' | 'CLEAR') {
+    setBusyId(r.id); setError('');
+    try {
+      await api.post(`/admin/feedback/${r.feedback.id}/moderate`, { action, reason: (reasons[r.id] || '').trim() || `Report: ${r.reason}`.slice(0, 500) });
+      await load();
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Action failed.');
+      if (e?.response?.status === 409) await load();
+    } finally { setBusyId(''); }
+  }
+
+  return (
+    <div>
+      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+      {loading && <p className="text-gray-400">Loading...</p>}
+      {!loading && reports.length === 0 && <div className="bg-white rounded-xl shadow-sm p-8 text-center text-gray-400">No open reports</div>}
+      <div className="space-y-3">
+        {reports.map((r) => (
+          <div key={r.id} className="bg-white rounded-xl shadow-sm p-4">
+            <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500 mb-1">
+              <span>{label(r.feedback.kind)}</span>
+              <span>{r.feedback.canteen?.name || 'No canteen'}</span>
+              {r.feedback.overallRating && <span>{r.feedback.overallRating}★</span>}
+              <span className={r.feedback.moderation === 'HIDDEN' ? 'text-red-600 font-semibold' : r.feedback.moderation === 'FLAGGED' ? 'text-amber-600 font-semibold' : ''}>{label(r.feedback.moderation)}</span>
+              <span>{new Date(r.createdAt).toLocaleString()}</span>
+            </div>
+            <p className="text-sm text-gray-800 mb-1">{r.feedback.snippet || <span className="text-gray-400">No text</span>}</p>
+            <p className="text-sm text-gray-600 mb-3"><span className="font-semibold">Report:</span> {r.reason}</p>
+            <div className="flex flex-wrap items-center gap-2">
+              <input aria-label="Moderation reason" placeholder="Reason (optional)" maxLength={500} value={reasons[r.id] || ''}
+                onChange={(e) => setReasons((p) => ({ ...p, [r.id]: e.target.value }))} className="border border-gray-300 rounded-lg px-3 py-1.5 text-sm w-64" />
+              <button disabled={busyId === r.id} onClick={() => act(r, 'HIDE')} className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-red-600 text-white disabled:opacity-40">Hide</button>
+              <button disabled={busyId === r.id} onClick={() => act(r, 'FLAG')} className="px-3 py-1.5 rounded-lg text-sm font-semibold bg-amber-500 text-white disabled:opacity-40">Flag</button>
+              <button disabled={busyId === r.id} onClick={() => act(r, 'CLEAR')} className="px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-300 disabled:opacity-40">Clear</button>
+            </div>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
