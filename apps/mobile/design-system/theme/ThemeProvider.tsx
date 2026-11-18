@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useMemo, useState } from 'react';
+import React, { createContext, useContext, useMemo, useState, useEffect } from 'react';
 import { Platform, useColorScheme } from 'react-native';
+import * as NavigationBar from 'expo-navigation-bar';
 import { MD3LightTheme, MD3DarkTheme, PaperProvider } from 'react-native-paper';
 import MaterialCommunityIcons from '@expo/vector-icons/MaterialCommunityIcons';
 import { M3LightColors, M3DarkColors, M3ColorScheme } from '../tokens/colors.android';
@@ -39,6 +40,15 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 
   const m3Colors = useMemo(() => (isDark ? M3DarkColors : M3LightColors), [isDark]);
   const cupertinoColors = useMemo(() => (isDark ? CupertinoDarkColors : CupertinoLightColors), [isDark]);
+
+  // Configure Android system Navigation Bar
+  useEffect(() => {
+    if (Platform.OS === 'android') {
+      try {
+        NavigationBar.setStyle(isDark ? 'light' : 'dark');
+      } catch (err) {}
+    }
+  }, [isDark]);
 
   const paperTheme = useMemo(() => {
     const base = isDark ? MD3DarkTheme : MD3LightTheme;

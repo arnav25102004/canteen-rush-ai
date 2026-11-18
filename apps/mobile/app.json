@@ -18,6 +18,10 @@
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#F97316"
       },
+      "androidNavigationBar": {
+        "backgroundColor": "#FCEBE3",
+        "barStyle": "dark-content"
+      },
       "googleServicesFile": "./google-services.json",
       "permissions": [
         "android.permission.INTERNET",
@@ -50,6 +54,13 @@
           "android": {
             "usesCleartextTraffic": false
           }
+        }
+      ],
+      [
+        "expo-navigation-bar",
+        {
+          "style": "dark",
+          "enforceContrast": false
         }
       ],
       "expo-status-bar",
