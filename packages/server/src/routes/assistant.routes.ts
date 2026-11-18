@@ -9,6 +9,8 @@ import { assistantDisabledReason, isPilotAllowed, loadAssistantConfig } from '..
 import { getUsageToday, MAX_TURNS_PER_USER } from '../assistant/budget';
 import { governor } from '../assistant/provider/modelGovernor';
 import { logger } from '../utils/logger';
+import { requireAssistantEnabled } from '../assistant/enabled';
+import { createConversation, deleteConversations, getCurrentConversation, postTurn, reportMessage } from '../controllers/assistant.controller';
 
 const router = Router();
 
@@ -56,5 +58,14 @@ router.post(
     }
   },
 );
+
+/** One assistant turn: a message or a chip action. */
+router.post('/turn', authenticate, requireCustomer, requireAssistantEnabled, userLimiter('assistant-turn', 60_000, 8), postTurn);
+
+router.get('/conversations/current', authenticate, requireCustomer, requireAssistantEnabled, getCurrentConversation);
+router.post('/conversations', authenticate, requireCustomer, requireAssistantEnabled, createConversation);
+/** Works even when the assistant is off, so students can always delete their chats. */
+router.delete('/conversations', authenticate, requireCustomer, deleteConversations);
+router.post('/messages/:id/report', authenticate, requireCustomer, userLimiter('assistant-report', 60 * 60_000, 20), reportMessage);
 
 export default router;

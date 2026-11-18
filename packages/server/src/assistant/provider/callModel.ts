@@ -13,6 +13,7 @@ export const MAX_WAIT_FOR_RETRY_AFTER_MS = 1_000;
 export interface CallModelInput {
   messages: ChatMessage[];
   tools?: ToolDef[];
+  toolChoice?: 'auto' | 'none';
   userId: string | null;
   userTokensToday: number;
   globalTokensToday: number;
@@ -81,6 +82,7 @@ export async function callModel(input: CallModelInput, deps: CallModelDeps): Pro
           model: spec.id,
           messages: input.messages,
           tools: offered,
+          toolChoice: offered ? input.toolChoice : undefined,
           maxTokens: spec.maxTokens,
           reasoningEffort: spec.reasoningEffort,
           timeoutMs,

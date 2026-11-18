@@ -67,7 +67,7 @@ export function createOpenAICompatibleProvider(opts: OpenAICompatibleOptions): P
           type: 'function',
           function: { name: t.name, description: t.description, parameters: t.parameters },
         }));
-        body.tool_choice = 'auto';
+        body.tool_choice = req.toolChoice ?? 'auto';
       }
       if (req.reasoningEffort) body.reasoning_effort = req.reasoningEffort;
 
