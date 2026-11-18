@@ -1,7 +1,7 @@
 import { Prisma, OrderStatus, UserRole, FeedbackKind, FeedbackModeration, FeedbackPriority, FeedbackVisibility } from '@prisma/client';
 import { prisma } from '../config/database';
 import { AppError } from '../utils/errors';
-import { CreateOrderReviewInput, UpdateFeedbackInput } from '../utils/feedbackSchemas';
+import { CreateAppFeedbackInput, CreateOrderReviewInput, UpdateFeedbackInput } from '../utils/feedbackSchemas';
 import { moderateText } from './feedbackModeration.service';
 import { applyCanteenDelta, applyItemDelta } from './feedbackAggregates.service';
 import { slaDueAt } from '../utils/feedbackSla';
@@ -10,6 +10,10 @@ export const REVIEW_WINDOW_MS = 7 * 24 * 3600 * 1000;
 export const EDIT_WINDOW_MS = 24 * 3600 * 1000;
 export const MAX_EDITS = 3;
 export const MAX_FEEDBACK_PER_30_DAYS = 50;
+export const MAX_APP_FEEDBACK_PER_DAY = 3;
+export const APP_MIN_ACCOUNT_AGE_MS = 24 * 3600 * 1000;
+export const PAYMENT_SUPPORT_HINT =
+  'For payment problems, please also contact Campus Khana support so we can check your transaction.';
 
 /** Events the author may see; internal notes are filtered out in the query as well as in studentView. */
 const PUBLIC_EVENTS = { where: { isInternal: false }, orderBy: { createdAt: 'asc' as const } };
@@ -227,6 +231,104 @@ export async function createOrderReview(
         where: { orderId: order.id, kind: FeedbackKind.ORDER_REVIEW, deletedAt: null }, select: { id: true },
       });
       if (dup) throw new AppError(409, 'You already reviewed this order', 'ALREADY_REVIEWED', { feedbackId: dup.id });
+    }
+    throw err;
+  }
+}
+
+/** Priority an app bug gets from its severity. Payment problems are the most urgent. */
+export function appPriority(kind: FeedbackKind, severity?: string | null): FeedbackPriority {
+  if (kind !== FeedbackKind.APP_BUG) return FeedbackPriority.NORMAL;
+  if (severity === 'PAYMENT_ISSUE') return FeedbackPriority.URGENT;
+  if (severity === 'BLOCKS_ME') return FeedbackPriority.HIGH;
+  return FeedbackPriority.NORMAL;
+}
+
+function appResponse(fb: any, severity?: string | null) {
+  return {
+    ...studentView(fb),
+    supportHint: severity === 'PAYMENT_ISSUE' ? PAYMENT_SUPPORT_HINT : undefined,
+  };
+}
+
+const APP_KIND_LIST: FeedbackKind[] = [
+  FeedbackKind.APP_BUG, FeedbackKind.APP_IDEA, FeedbackKind.APP_PRAISE, FeedbackKind.APP_OTHER,
+];
+
+/** App feedback (bug, idea, praise, other). Open to every logged-in role. */
+export async function createAppFeedback(
+  userId: string,
+  input: CreateAppFeedbackInput,
+  now = new Date(),
+): Promise<{ feedback: any; created: boolean }> {
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { id: true, isBanned: true, isDeleted: true, institutionId: true, createdAt: true },
+  });
+  if (!user || user.isDeleted) throw new AppError(404, 'Not found');
+  if (user.isBanned) throw new AppError(403, 'Your account cannot post feedback', 'ACCOUNT_RESTRICTED');
+
+  const sev = input.severity ?? null;
+  const prior = await prisma.feedback.findUnique({
+    where: { userId_clientRequestId: { userId, clientRequestId: input.clientRequestId } },
+  });
+  if (prior) return { feedback: appResponse(prior, sev), created: false };
+
+  if (now.getTime() - user.createdAt.getTime() < APP_MIN_ACCOUNT_AGE_MS) {
+    throw new AppError(403, 'New accounts can send app feedback after 24 hours.', 'ACCOUNT_TOO_NEW');
+  }
+
+  const priority = appPriority(input.kind as FeedbackKind, sev);
+  const context = input.contextJson || sev ? { ...(input.contextJson ?? {}), ...(sev ? { severity: sev } : {}) } : undefined;
+  const tags = [...(input.tags ?? [])];
+  if (sev === 'PAYMENT_ISSUE' && !tags.includes('payment')) tags.push('payment');
+
+  try {
+    return await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
+
+      const again = await tx.feedback.findUnique({
+        where: { userId_clientRequestId: { userId, clientRequestId: input.clientRequestId } },
+      });
+      if (again) return { feedback: appResponse(again, sev), created: false };
+
+      const dayCount = await tx.feedback.count({
+        where: { userId, kind: { in: APP_KIND_LIST }, createdAt: { gte: new Date(now.getTime() - 24 * 3600 * 1000) } },
+      });
+      if (dayCount >= MAX_APP_FEEDBACK_PER_DAY) {
+        throw new AppError(429, 'You can send 3 app feedbacks a day. Try again tomorrow.', 'APP_FEEDBACK_DAILY_CAP');
+      }
+      const recent = await tx.feedback.count({
+        where: { userId, createdAt: { gte: new Date(now.getTime() - 30 * 24 * 3600 * 1000) } },
+      });
+      if (recent >= MAX_FEEDBACK_PER_30_DAYS) {
+        throw new AppError(429, 'Feedback limit reached. Try again later.', 'FEEDBACK_CAP');
+      }
+
+      const fb = await tx.feedback.create({
+        data: {
+          kind: input.kind as FeedbackKind,
+          visibility: FeedbackVisibility.ADMIN_ONLY,
+          priority,
+          userId,
+          institutionId: user.institutionId,
+          tags,
+          body: input.body || null,
+          isAnonymous: input.isAnonymous ?? false,
+          contextJson: context as Prisma.InputJsonValue | undefined,
+          clientRequestId: input.clientRequestId,
+          slaDueAt: slaDueAt(priority, now),
+          ...moderationFields(input.body),
+        },
+      });
+      return { feedback: appResponse(fb, sev), created: true };
+    });
+  } catch (err) {
+    if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+      const existing = await prisma.feedback.findUnique({
+        where: { userId_clientRequestId: { userId, clientRequestId: input.clientRequestId } },
+      });
+      if (existing) return { feedback: appResponse(existing, sev), created: false };
     }
     throw err;
   }

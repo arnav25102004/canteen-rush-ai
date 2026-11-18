@@ -48,7 +48,42 @@ export interface MyFeedback {
   items: ItemRatingInput[];
 }
 
+export type AppFeedbackKind = 'APP_BUG' | 'APP_IDEA' | 'APP_PRAISE' | 'APP_OTHER';
+export type AppSeverity = 'ANNOYING' | 'BLOCKS_ME' | 'PAYMENT_ISSUE';
+
+export interface AppFeedbackPayload {
+  clientRequestId: string;
+  kind: AppFeedbackKind;
+  body?: string;
+  severity?: AppSeverity;
+  tags?: string[];
+  isAnonymous?: boolean;
+  contextJson?: Record<string, unknown>;
+}
+
+export interface TimelineEntry {
+  type: string;
+  toStatus: string | null;
+  reply: string | null;
+  createdAt: string;
+}
+
+export interface MyFeedbackListItem extends MyFeedback {
+  timeline: TimelineEntry[];
+  supportHint?: string;
+}
+
 export const REVIEW_TIMEOUT_MS = 15000;
+
+export async function createAppFeedback(p: AppFeedbackPayload): Promise<MyFeedbackListItem> {
+  const { data } = await api.post('/feedback/app', p, { timeout: REVIEW_TIMEOUT_MS });
+  return data.feedback;
+}
+
+export async function listMyFeedback(page = 1, limit = 30): Promise<{ feedback: MyFeedbackListItem[]; total: number }> {
+  const { data } = await api.get('/feedback/mine', { params: { page, limit } });
+  return { feedback: data.feedback ?? [], total: data.total ?? 0 };
+}
 
 export async function getEligibility(orderId: string): Promise<Eligibility> {
   const { data } = await api.get(`/feedback/eligibility/${orderId}`);

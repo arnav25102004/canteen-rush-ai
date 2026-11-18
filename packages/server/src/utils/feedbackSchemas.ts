@@ -80,5 +80,43 @@ export const updateFeedbackSchema = z
   })
   .refine((o) => Object.keys(o).length > 0, { message: 'Nothing to update' });
 
+export const APP_KINDS = ['APP_BUG', 'APP_IDEA', 'APP_PRAISE', 'APP_OTHER'] as const;
+export const APP_SEVERITIES = ['ANNOYING', 'BLOCKS_ME', 'PAYMENT_ISSUE'] as const;
+export const MIN_APP_BODY_LETTERS = 10;
+
+export function letterCount(s: string): number {
+  return (s.match(/\p{L}/gu) ?? []).length;
+}
+
+export const createAppFeedbackSchema = z
+  .object({
+    clientRequestId: z.string().min(8).max(64),
+    kind: z.enum(APP_KINDS),
+    body: feedbackBody.optional(),
+    severity: z.enum(APP_SEVERITIES).optional(),
+    tags: feedbackTags.optional(),
+    isAnonymous: z.boolean().optional(),
+    contextJson: contextJson.optional(),
+  })
+  .superRefine((o, ctx) => {
+    if ((o.kind === 'APP_BUG' || o.kind === 'APP_IDEA') && letterCount(o.body ?? '') < MIN_APP_BODY_LETTERS) {
+      ctx.addIssue({ code: 'custom', path: ['body'], message: `Please write at least ${MIN_APP_BODY_LETTERS} letters` });
+    }
+    if (o.kind === 'APP_BUG' && !o.severity) {
+      ctx.addIssue({ code: 'custom', path: ['severity'], message: 'Severity is required for bugs' });
+    }
+    if (o.kind !== 'APP_BUG' && o.severity) {
+      ctx.addIssue({ code: 'custom', path: ['severity'], message: 'Severity applies to bugs only' });
+    }
+    if ((o.kind === 'APP_PRAISE' || o.kind === 'APP_OTHER') && letterCount(o.body ?? '') < 1) {
+      ctx.addIssue({ code: 'custom', path: ['body'], message: 'Please write something' });
+    }
+    const merged = { ...(o.contextJson ?? {}), severity: o.severity };
+    if (Buffer.byteLength(JSON.stringify(merged), 'utf8') > CONTEXT_MAX_BYTES) {
+      ctx.addIssue({ code: 'custom', path: ['contextJson'], message: 'Context too large' });
+    }
+  });
+
+export type CreateAppFeedbackInput = z.infer<typeof createAppFeedbackSchema>;
 export type CreateOrderReviewInput = z.infer<typeof createOrderReviewSchema>;
 export type UpdateFeedbackInput = z.infer<typeof updateFeedbackSchema>;

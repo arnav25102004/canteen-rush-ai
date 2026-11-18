@@ -1,7 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import NetInfo from '@react-native-community/netinfo';
 import { AppState } from 'react-native';
-import { createReview, updateReview, CreateReviewPayload, MyFeedback } from './feedback';
+import {
+  createReview, updateReview, createAppFeedback, CreateReviewPayload, AppFeedbackPayload, MyFeedback,
+} from './feedback';
 
 /**
  * Offline-safe review submit. The payload (with its clientRequestId) is persisted before the
@@ -14,9 +16,12 @@ const BASE_DELAY_MS = 2000;
 const MAX_DELAY_MS = 5 * 60 * 1000;
 
 export interface QueueItem {
+  /** Queue key: the order id, or `app:<clientRequestId>` for app feedback. */
   orderId: string;
   mode: 'create' | 'edit';
   payload: CreateReviewPayload;
+  /** Set for app feedback; the item is then sent to POST /feedback/app and `payload` is unused. */
+  appPayload?: AppFeedbackPayload;
   feedbackId?: string; // set in edit mode
   attempts: number;
   nextAt: number;
@@ -91,7 +96,8 @@ async function attempt(item: QueueItem): Promise<'done' | 'retry'> {
   notify();
   try {
     let feedback: MyFeedback;
-    if (item.mode === 'edit' && item.feedbackId) feedback = await updateReview(item.feedbackId, toEditPayload(item.payload));
+    if (item.appPayload) feedback = await createAppFeedback(item.appPayload);
+    else if (item.mode === 'edit' && item.feedbackId) feedback = await updateReview(item.feedbackId, toEditPayload(item.payload));
     else feedback = await createReview(item.payload);
     await removeItem(item.orderId);
     emit({ type: 'sent', orderId: item.orderId, feedback });
@@ -167,6 +173,34 @@ export async function submitReview(
     let settled = false;
     const off = subscribeQueueEvents((e) => {
       if (e.orderId !== orderId || settled) return;
+      settled = true; off();
+      if (e.type === 'sent') resolve({ state: 'sent', feedback: e.feedback });
+      else resolve({ state: 'failed', message: e.message, status: e.status, code: e.code });
+    });
+    void attempt(item).then((r) => {
+      if (r === 'retry' && !settled) { settled = true; off(); resolve({ state: 'queued' }); }
+      schedule();
+    });
+  });
+}
+
+export const appQueueKey = (clientRequestId: string) => `app:${clientRequestId}`;
+
+/** App feedback through the same offline queue. The clientRequestId makes retries idempotent. */
+export async function submitAppFeedback(payload: AppFeedbackPayload): Promise<SubmitResult> {
+  const key = appQueueKey(payload.clientRequestId);
+  const list = await load();
+  const item: QueueItem = {
+    orderId: key, mode: 'create', payload: undefined as unknown as CreateReviewPayload, appPayload: payload,
+    attempts: 0, nextAt: 0, createdAt: Date.now(),
+  };
+  items = [...list.filter((i) => i.orderId !== key), item];
+  await save();
+
+  return new Promise<SubmitResult>((resolve) => {
+    let settled = false;
+    const off = subscribeQueueEvents((e) => {
+      if (e.orderId !== key || settled) return;
       settled = true; off();
       if (e.type === 'sent') resolve({ state: 'sent', feedback: e.feedback });
       else resolve({ state: 'failed', message: e.message, status: e.status, code: e.code });
