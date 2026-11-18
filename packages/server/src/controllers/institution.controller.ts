@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
+import { getMoodsForCanteens } from '../services/feedbackMood.service';
 
 export async function listInstitutions(req: Request, res: Response) {
   const institutions = await prisma.institution.findMany({
@@ -28,7 +29,16 @@ export async function getInstitutionCanteens(req: Request, res: Response) {
     },
     orderBy: { name: 'asc' },
   });
-  return res.json({ institution, canteens });
+  // One grouped query for every canteen's 7-day mood (additive fields; null until 10+ ratings).
+  const moods = await getMoodsForCanteens(canteens.map((c) => c.id));
+  return res.json({
+    institution,
+    canteens: canteens.map((c) => ({
+      ...c,
+      mood: moods.get(c.id)?.mood ?? null,
+      moodCount: moods.get(c.id)?.moodCount ?? 0,
+    })),
+  });
 }
 
 export async function getInstitutionBySlug(req: Request, res: Response) {

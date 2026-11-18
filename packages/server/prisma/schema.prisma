@@ -383,6 +383,7 @@ model PointTransaction {
   loyaltyId    String               @map("loyalty_id")
   orderId      String?              @map("order_id")
   feedbackId   String?              @unique @map("feedback_id") // one award per review
+  helpfulFeedbackId String?         @unique @map("helpful_feedback_id") // one admin "helpful" bonus per review
   type         PointTransactionType
   points       Int
   description  String
@@ -607,6 +608,7 @@ model FeedbackReport {
 model ChangelogEntry {
   id            String    @id @default(uuid())
   institutionId String?   @map("institution_id") // null = platform-wide
+  canteenId     String?   @map("canteen_id") // set when the change is about one canteen
   title         String
   body          String
   createdBy     String?   @map("created_by")

@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, ActivityIndicator, StyleSheet } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { Eligibility, getEligibility, getMyFeedback, newRequestId, CreateReviewPayload } from '../../../services/feedback';
+import { Eligibility, getEligibility, getMyFeedback, getFeedbackStreak, FeedbackStreak, newRequestId, CreateReviewPayload } from '../../../services/feedback';
 import {
   clearDraft, loadDraft, saveDraft, submitReview, subscribeQueueEvents, ReviewDraft,
 } from '../../../services/feedbackQueue';
@@ -14,7 +14,7 @@ import VibeDial from '../../../components/feedback/VibeDial';
 import ItemCardStack, { ItemAnswer } from '../../../components/feedback/ItemCardStack';
 import ExtrasStep from '../../../components/feedback/ExtrasStep';
 
-type Result = null | { state: 'sent' | 'queued' } | { state: 'failed'; message: string };
+type Result = null | { state: 'sent'; points: number } | { state: 'queued' } | { state: 'failed'; message: string };
 
 export default function OrderReviewScreen() {
   const { orderId } = useLocalSearchParams<{ orderId: string }>();
@@ -39,6 +39,7 @@ export default function OrderReviewScreen() {
   const [anonymous, setAnonymous] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<Result>(null);
+  const [streak, setStreak] = useState<FeedbackStreak | null>(null);
   const requestId = useRef(newRequestId());
 
   const effectiveAnonymous = anonymous ?? (vibe != null && vibe <= 2);
@@ -82,7 +83,7 @@ export default function OrderReviewScreen() {
   // A queued submit can finish after this screen was left and re-opened.
   useEffect(() => subscribeQueueEvents((e) => {
     if (e.orderId !== orderId) return;
-    if (e.type === 'sent') { void clearDraft(orderId); setResult({ state: 'sent' }); }
+    if (e.type === 'sent') { void clearDraft(orderId); setResult({ state: 'sent', points: e.feedback?.pointsAwarded ?? 0 }); }
     else setResult({ state: 'failed', message: e.message });
   }), [orderId]);
 
@@ -110,7 +111,13 @@ export default function OrderReviewScreen() {
     setSubmitting(true);
     const r = await submitReview(orderId, buildPayload(quick), { feedbackId: editId ?? undefined });
     setSubmitting(false);
-    if (r.state === 'sent') { await clearDraft(orderId); if (!reduceMotion) success(); setResult({ state: 'sent' }); }
+    if (r.state === 'sent') {
+      await clearDraft(orderId);
+      if (!reduceMotion) success();
+      // Only what the server says: points are shown only if it awarded them.
+      setResult({ state: 'sent', points: r.feedback?.pointsAwarded ?? 0 });
+      getFeedbackStreak().then(setStreak).catch(() => {});
+    }
     else if (r.state === 'queued') { await clearDraft(orderId); setResult({ state: 'queued' }); }
     else setResult({ state: 'failed', message: r.message });
   };
@@ -158,7 +165,13 @@ export default function OrderReviewScreen() {
         <Text style={styles.title} accessibilityRole="header">{t('thanksTitle', lang)}</Text>
         <Text style={styles.body}>{result.state === 'queued' ? t('thanksQueued', lang) : t('thanksBody', lang)}</Text>
         {vibe != null && vibe <= 2 && <Text style={styles.body}>{t('thanksNegative', lang)}</Text>}
-        {/* Streak and points are added in a later step. */}
+        {result.state === 'sent' && result.points > 0 && (
+          <Text style={styles.points} accessibilityLiveRegion="polite">{t('pointsAwarded', lang, { n: result.points })}</Text>
+        )}
+        {result.state === 'sent' && !!streak && streak.currentStreakWeeks > 0 && (
+          <Text style={styles.body}>{t('streakLine', lang, { n: streak.currentStreakWeeks })}</Text>
+        )}
+        {result.state === 'sent' && <Text style={styles.muted}>{t('pointsNote', lang)}</Text>}
         <Btn label={t('done', lang)} onPress={close} primary />
       </View>
     );
@@ -254,6 +267,7 @@ const styles = StyleSheet.create({
   center: { flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 12 },
   title: { fontSize: 22, fontWeight: '800', color: '#1a1a2e', textAlign: 'center' },
   body: { fontSize: 15, color: '#374151', textAlign: 'center' },
+  points: { fontSize: 20, fontWeight: '800', color: '#10b981', textAlign: 'center', marginTop: 8 },
   muted: { fontSize: 13, color: '#6b7280', textAlign: 'center', marginTop: 4 },
   bigEmoji: { fontSize: 64 },
   banner: { backgroundColor: '#fffbeb', color: '#92400e', padding: 10, borderRadius: 10, marginBottom: 12, fontSize: 13 },

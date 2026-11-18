@@ -1,4 +1,5 @@
 'use client';
+import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useMemo, useState } from 'react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import Sidebar from '../../../components/shared/Sidebar';
@@ -211,6 +212,7 @@ function Drawer({ id, meId, onClose, onChanged }: { id: string; meId: string; on
   const [status, setStatus] = useState('');
   const [reason, setReason] = useState('');
   const [dupOf, setDupOf] = useState('');
+  const [helpfulMsg, setHelpfulMsg] = useState('');
 
   const load = useCallback(async () => {
     setError('');
@@ -312,6 +314,15 @@ function Drawer({ id, meId, onClose, onChanged }: { id: string; meId: string; on
                   Set to {label(status)}
                 </button>
               )}
+            </div>
+
+            <div className="border-t pt-4 flex flex-wrap gap-2">
+              <Link href={`/admin/changelog?link=${id}`} className="px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-300">Publish to changelog</Link>
+              {(
+                <button disabled={busy} onClick={() => run(async () => { const r = await api.patch(`/admin/feedback/${id}`, { helpful: true }); setHelpfulMsg(r.data.helpfulAwarded ? '+10 points sent' : 'Already marked helpful'); })}
+                  className="px-3 py-1.5 rounded-lg text-sm font-semibold border border-gray-300 disabled:opacity-40">Mark helpful (+10 pts)</button>
+              )}
+              {helpfulMsg && <span className="text-sm text-green-700 self-center">{helpfulMsg}</span>}
             </div>
 
             <div className="border-t pt-4 space-y-2">

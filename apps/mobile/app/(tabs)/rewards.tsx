@@ -1,6 +1,8 @@
 import { useEffect, useState } from 'react';
 import { View, Text, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
 import api from '../../services/api';
+import { getFeedbackStreak, FeedbackStreak } from '../../services/feedback';
+import { t } from '../../components/feedback/copy';
 
 const REDEMPTION_TIERS = [
   { points: 200,  discount: 20  },
@@ -13,8 +15,9 @@ const TX_COLOR: Record<string, string> = { EARNED: '#10b981', REDEEMED: '#ef4444
 export default function RewardsScreen() {
   const [account, setAccount] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [streak, setStreak] = useState<FeedbackStreak | null>(null);
 
-  useEffect(() => { loadLoyalty(); }, []);
+  useEffect(() => { loadLoyalty(); getFeedbackStreak().then(setStreak).catch(() => {}); }, []);
 
   async function loadLoyalty() {
     try {
@@ -89,6 +92,19 @@ export default function RewardsScreen() {
               })}
             </View>
 
+            {/* Review streak: consecutive weeks with a quality review */}
+            {streak && (
+              <View style={styles.streakCard} accessible accessibilityLabel={`${t('streakTitle')}. ${streak.currentStreakWeeks > 0 ? t('streakWeeks', 'en', { n: streak.currentStreakWeeks }) : t('streakEmpty')}. ${t('dailyCapLeft', 'en', { n: streak.dailyCapRemaining })}`}>
+                <Text style={styles.streakTitle}>🔥 {t('streakTitle')}</Text>
+                <Text style={styles.streakValue}>
+                  {streak.currentStreakWeeks > 0 ? t('streakWeeks', 'en', { n: streak.currentStreakWeeks }) : t('streakEmpty')}
+                </Text>
+                {streak.bestStreakWeeks > 0 && <Text style={styles.streakSub}>{t('streakBest', 'en', { n: streak.bestStreakWeeks })}</Text>}
+                <Text style={styles.streakSub}>{t('dailyCapLeft', 'en', { n: streak.dailyCapRemaining })}</Text>
+                <Text style={styles.streakSub}>{t('pointsNote')}</Text>
+              </View>
+            )}
+
             {/* Early bird tip */}
             <View style={styles.tipCard}>
               <Text style={styles.tipIcon}>🌅</Text>
@@ -141,6 +157,10 @@ const styles = StyleSheet.create({
   tierTitleLocked: { color: '#9ca3af' },
   tierAway: { fontSize: 12, color: '#9ca3af', marginTop: 2 },
   tierReady: { fontSize: 12, color: '#10b981', marginTop: 2 },
+  streakCard: { backgroundColor: '#fff7ed', borderRadius: 12, padding: 14, marginBottom: 16, borderWidth: 1, borderColor: '#fed7aa' },
+  streakTitle: { fontSize: 13, fontWeight: '700', color: '#9a3412' },
+  streakValue: { fontSize: 16, fontWeight: '800', color: '#1a1a2e', marginTop: 4 },
+  streakSub: { fontSize: 12, color: '#78350f', marginTop: 2 },
   tipCard: { backgroundColor: '#fef9c3', borderRadius: 12, padding: 14, marginBottom: 16, flexDirection: 'row', alignItems: 'center', gap: 10, borderWidth: 1, borderColor: '#fde68a' },
   tipIcon: { fontSize: 24 },
   tipText: { fontSize: 13, color: '#78350f', flex: 1 },

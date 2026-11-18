@@ -46,6 +46,8 @@ export interface MyFeedback {
   createdAt: string;
   editDeadline: string | null;
   items: ItemRatingInput[];
+  /** Set only on a fresh review: points the server actually awarded (0 or absent when none). */
+  pointsAwarded?: number;
 }
 
 export type AppFeedbackKind = 'APP_BUG' | 'APP_IDEA' | 'APP_PRAISE' | 'APP_OTHER';
@@ -111,6 +113,25 @@ export async function getReviewedOrderIds(): Promise<Record<string, string>> {
   const out: Record<string, string> = {};
   for (const f of data.feedback ?? []) if (f.kind === 'ORDER_REVIEW' && f.orderId) out[f.orderId] = f.id;
   return out;
+}
+
+export interface FeedbackStreak {
+  currentStreakWeeks: number;
+  bestStreakWeeks: number;
+  pointsEarnedToday: number;
+  dailyCapRemaining: number;
+}
+
+export async function getFeedbackStreak(): Promise<FeedbackStreak> {
+  const { data } = await api.get('/feedback/streak');
+  return data;
+}
+
+export interface ChangelogEntry { id: string; title: string; body: string; canteenId: string | null; publishedAt: string }
+
+export async function getChangelog(page = 1, limit = 20): Promise<{ entries: ChangelogEntry[]; total: number }> {
+  const { data } = await api.get('/feedback/changelog', { params: { page, limit } });
+  return { entries: data.entries ?? [], total: data.total ?? 0 };
 }
 
 export const REVIEW_WINDOW_MS = 7 * 24 * 3600 * 1000;

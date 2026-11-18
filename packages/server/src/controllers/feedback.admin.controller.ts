@@ -37,6 +37,7 @@ const updateBody = z.object({
   assignedTo: z.string().uuid().nullable().optional(),
   duplicateOfId: z.string().uuid().nullable().optional(),
   reason: z.string().max(500).optional(),
+  helpful: z.boolean().optional(),
 }).refine((b) => !b.status || !!b.expectedStatus, { message: 'expectedStatus is required with status', path: ['expectedStatus'] });
 
 const textBody = z.object({ text: z.string().min(1).max(5000) });
