@@ -79,3 +79,5 @@ export function ThemeProvider({ children }: { children: React.ReactNode }) {
 }
 
 export const useAppTheme = () => useContext(ThemeContext);
+export const useTheme = useAppTheme;
+

@@ -4,7 +4,7 @@ import {
   NativeSyntheticEvent,
   ReturnKeyTypeOptions,
   StyleProp,
-  TextInputFocusEventData,
+  TextInputFocusEvent,
   TextStyle,
   ViewStyle,
 } from 'react-native';
@@ -45,9 +45,9 @@ export interface AppTextFieldProps {
   /** Callback when right icon is clicked */
   onRightIconPress?: () => void;
   /** Blur callback */
-  onBlur?: (e: NativeSyntheticEvent<TextInputFocusEventData>) => void;
+  onBlur?: (e: TextInputFocusEvent) => void;
   /** Focus callback */
-  onFocus?: (e: NativeSyntheticEvent<TextInputFocusEventData>) => void;
+  onFocus?: (e: TextInputFocusEvent) => void;
   /** Outer container style override */
   style?: StyleProp<ViewStyle>;
   /** Input text style override */

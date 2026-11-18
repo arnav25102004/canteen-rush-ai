@@ -110,7 +110,7 @@ export const ExpressiveRipple = React.memo(
         {/* Static 8% Hover State Layer */}
         <Animated.View
           style={[
-            StyleSheet.absoluteFillObject,
+            StyleSheet.absoluteFill,
             { backgroundColor: color },
             animatedHoverStyle,
           ]}
@@ -131,7 +131,7 @@ export const ExpressiveRipple = React.memo(
 
 const styles = StyleSheet.create({
   container: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     overflow: 'hidden',
   },
   wave: {

@@ -1,24 +1,55 @@
 import { Tabs } from 'expo-router';
-import { ColorValue, Text } from 'react-native';
+import React from 'react';
+import { useTheme } from '../../design-system/theme/ThemeProvider';
+import { ExpressiveNavigationBar } from '../../design-system/components/NavigationBar';
 
 export default function TabsLayout() {
+  const { colors } = useTheme();
+
   return (
-    <Tabs screenOptions={{
-      tabBarActiveTintColor: '#e94560',
-      tabBarInactiveTintColor: '#999',
-      tabBarStyle: { backgroundColor: '#fff', borderTopColor: '#eee' },
-      headerStyle: { backgroundColor: '#1a1a2e' },
-      headerTintColor: '#fff',
-      headerTitleStyle: { fontWeight: 'bold' },
-    }}>
-      <Tabs.Screen name="home" options={{ title: 'Canteens', tabBarIcon: ({ color }) => <TabIcon emoji="🏪" color={color} /> }} />
-      <Tabs.Screen name="orders" options={{ title: 'Orders', tabBarIcon: ({ color }) => <TabIcon emoji="📋" color={color} /> }} />
-      <Tabs.Screen name="rewards" options={{ title: 'Rewards', tabBarIcon: ({ color }) => <TabIcon emoji="⭐" color={color} /> }} />
-      <Tabs.Screen name="profile" options={{ title: 'Profile', tabBarIcon: ({ color }) => <TabIcon emoji="👤" color={color} /> }} />
+    <Tabs
+      tabBar={(props) => <ExpressiveNavigationBar {...props} />}
+      screenOptions={{
+        headerShown: true,
+        headerStyle: {
+          backgroundColor: colors.surfaceContainer,
+          elevation: 0,
+          shadowOpacity: 0,
+          borderBottomWidth: 1,
+          borderBottomColor: colors.outlineVariant,
+        },
+        headerTintColor: colors.onSurface,
+        headerTitleStyle: {
+          fontWeight: '600',
+          fontSize: 18,
+          letterSpacing: 0.15,
+        },
+      }}
+    >
+      <Tabs.Screen
+        name="home"
+        options={{
+          title: 'Canteens',
+        }}
+      />
+      <Tabs.Screen
+        name="orders"
+        options={{
+          title: 'Orders',
+        }}
+      />
+      <Tabs.Screen
+        name="rewards"
+        options={{
+          title: 'Rewards',
+        }}
+      />
+      <Tabs.Screen
+        name="profile"
+        options={{
+          title: 'Profile',
+        }}
+      />
     </Tabs>
   );
-}
-
-function TabIcon({ emoji, color }: { emoji: string; color: ColorValue }) {
-  return <Text style={{ fontSize: 22, opacity: color === '#e94560' ? 1 : 0.5 }}>{emoji}</Text>;
 }

@@ -114,10 +114,12 @@ export const ExpressiveSwitch = React.memo(function ExpressiveSwitch({
     const currentWidth =
       thumbBaseSize + pressProgress.value * (thumbStretchWidth - thumbBaseSize);
 
+    const offThumb = palette.thumbOff || palette.thumb || '#FFFFFF';
+    const onThumb = palette.thumbOn || palette.thumb || '#FFFFFF';
     const backgroundColor = interpolateColor(
       progress.value,
       [0, 1],
-      [palette.thumbOff || palette.thumb, palette.thumbOn || palette.thumb]
+      [offThumb, onThumb]
     );
 
     return {

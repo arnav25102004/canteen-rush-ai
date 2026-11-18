@@ -1,7 +1,7 @@
 import React from 'react';
 import { Pressable, StyleSheet, View, StyleProp, ViewStyle } from 'react-native';
 import * as Haptics from 'expo-haptics';
-import { CupertinoColors } from '../../tokens/colors.ios';
+import { CupertinoLightColors, CupertinoDarkColors } from '../../tokens/colors.ios';
 
 export interface AppCardProps {
   children: React.ReactNode;
@@ -29,7 +29,7 @@ export function Card({ children, onPress, style }: AppCardProps) {
 
 const styles = StyleSheet.create({
   card: {
-    backgroundColor: CupertinoColors.secondaryGroupedBackground,
+    backgroundColor: CupertinoLightColors.secondaryGroupedBackground,
     borderRadius: 16,
     overflow: 'hidden',
     shadowColor: '#000',
@@ -37,7 +37,7 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.05,
     shadowRadius: 6,
     borderWidth: 0.5,
-    borderColor: CupertinoColors.separator,
+    borderColor: CupertinoLightColors.separator,
   },
   pressed: {
     opacity: 0.8,

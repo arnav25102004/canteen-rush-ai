@@ -68,7 +68,7 @@ export const TextField = React.memo(function TextField({
   return (
     <View style={[styles.container, style]}>
       <PaperTextInput
-        mode={variant}
+        mode={variant === 'filled' ? 'flat' : 'outlined'}
         label={label}
         value={value}
         onChangeText={onChangeText}

@@ -20,6 +20,8 @@ export interface ExpressiveButtonProps {
   onPress?: (e?: GestureResponderEvent) => void;
   /** Variant style */
   variant?: ExpressiveButtonVariant;
+  /** Size tier */
+  size?: 'small' | 'medium' | 'large';
   /** Push button vs. Toggle / Selectable mode */
   isToggle?: boolean;
   /** Selected / Checked state when isToggle = true */

@@ -19,6 +19,7 @@ import { useAuthStore, EmailNotVerifiedError, resendVerificationEmail } from '..
 import { Button } from '../../design-system/components/Button';
 import { TextField } from '../../design-system/components/TextField';
 import { Switch } from '../../design-system/components/Switch';
+import { ExpressiveCheckbox } from '../../design-system/components/Checkbox';
 import { ConnectedButtonGroup } from '../../design-system/components/Button/ConnectedButtonGroup';
 import { useAppTheme } from '../../design-system/theme/ThemeProvider';
 import { TypographyTokens } from '../../design-system/tokens/typography';
@@ -308,20 +309,12 @@ export default function AuthScreen() {
                 />
 
                 <View style={styles.optionsRow}>
-                  <TouchableOpacity
-                    onPress={() => setRememberMe(prev => !prev)}
-                    style={styles.rememberMeContainer}
-                    activeOpacity={0.8}
-                  >
-                    <Switch
-                      value={rememberMe}
-                      onValueChange={setRememberMe}
-                      accessibilityLabel="Stay signed in switch"
-                    />
-                    <Text style={[styles.rememberMeText, { color: colors.onSurface }]}>
-                      Stay signed in
-                    </Text>
-                  </TouchableOpacity>
+                  <ExpressiveCheckbox
+                    checked={rememberMe}
+                    onCheckedChange={setRememberMe}
+                    label="Stay signed in"
+                    accessibilityLabel="Stay signed in checkbox"
+                  />
 
                   <TouchableOpacity
                     onPress={() => { setForgotEmail(email); setForgotVisible(true); }}
@@ -400,20 +393,15 @@ export default function AuthScreen() {
                   returnKeyType="done"
                 />
 
-                <TouchableOpacity
-                  onPress={() => setAgreedToTerms(prev => !prev)}
-                  style={styles.termsRow}
-                  activeOpacity={0.8}
-                >
-                  <Switch
-                    value={agreedToTerms}
-                    onValueChange={setAgreedToTerms}
-                    accessibilityLabel="Agree to campus policies switch"
+                <View style={{ marginVertical: 4 }}>
+                  <ExpressiveCheckbox
+                    checked={agreedToTerms}
+                    onCheckedChange={setAgreedToTerms}
+                    label="I agree to canteen ordering rules & campus slot policies"
+                    accessibilityLabel="Agree to campus policies checkbox"
+                    labelStyle={{ fontSize: 13, flex: 1 }}
                   />
-                  <Text style={[styles.termsText, { color: colors.onSurfaceVariant }]}>
-                    I agree to canteen ordering rules & campus slot policies
-                  </Text>
-                </TouchableOpacity>
+                </View>
 
                 <Button
                   label="Create Account"
