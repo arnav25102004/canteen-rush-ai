@@ -41,6 +41,16 @@ export function istHour(at: Date = new Date()): number {
   return new Date(at.getTime() + IST_OFFSET_MS).getUTCHours();
 }
 
+/** Wall-clock time in IST as "HH:MM". */
+export function istHHMM(at: Date = new Date()): string {
+  return new Date(at.getTime() + IST_OFFSET_MS).toISOString().slice(11, 16);
+}
+
+/** IST calendar date as "YYYY-MM-DD", optionally shifted by whole days (0 = today, 1 = tomorrow). */
+export function istDayString(offsetDays = 0, at: Date = new Date()): string {
+  return new Date(at.getTime() + IST_OFFSET_MS + offsetDays * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 /** Absolute start time of a pickup slot. slot.date is a calendar date; startTime is IST "HH:MM". */
 export function slotStartsAt(slotDate: Date, startTime: string): Date {
   const { hours, minutes } = parseTimeString(startTime);
