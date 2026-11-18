@@ -29,6 +29,7 @@ import adminRoutes from './routes/admin.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import institutionRoutes from './routes/institution.routes';
 import loyaltyRoutes from './routes/loyalty.routes';
+import assistantRoutes from './routes/assistant.routes';
 import { globalErrorHandler } from './middleware/errorHandler';
 import { globalLimiter, authLimiter, forgotPasswordLimiter } from './middleware/rateLimit';
 
@@ -146,6 +147,7 @@ app.use('/api/analytics', analyticsRoutes);
 app.use('/api/vendor/analytics', analyticsRoutes);
 app.use('/api/institutions', institutionRoutes);
 app.use('/api/loyalty', loyaltyRoutes);
+app.use('/api/assistant', assistantRoutes);
 
 // Setup Socket.IO
 setupSocketIO(io);

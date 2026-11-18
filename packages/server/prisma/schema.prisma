@@ -582,7 +582,7 @@ model AssistantCallLog {
   // Nulled when the account is deleted.
   userId         String?  @map("user_id")
   conversationId String?  @map("conversation_id")
-  kind           String   // "model" | "tool"
+  kind           String   // "LLM" | "TOOL" | "TURN"
   name           String   // model id or tool name
   status         String   // ok | rate_limited | error | timeout | refused ...
   latencyMs      Int      @default(0) @map("latency_ms")
@@ -590,6 +590,8 @@ model AssistantCallLog {
   completionTokens Int    @default(0) @map("completion_tokens")
   argsSha256     String?  @map("args_sha256")
   groundingDrops Int      @default(0) @map("grounding_drops")
+  resultBytes    Int?     @map("result_bytes")
+  toolsOffered   Int?     @map("tools_offered")
   createdAt      DateTime @default(now()) @map("created_at")
 
   @@index([createdAt])
