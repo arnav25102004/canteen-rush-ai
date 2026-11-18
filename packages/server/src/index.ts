@@ -26,6 +26,7 @@ import walletRoutes from './routes/wallet.routes';
 import paymentRoutes from './routes/payment.routes';
 import notificationRoutes from './routes/notification.routes';
 import adminRoutes from './routes/admin.routes';
+import feedbackAdminRoutes from './routes/feedback.admin.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import institutionRoutes from './routes/institution.routes';
 import loyaltyRoutes from './routes/loyalty.routes';
@@ -141,6 +142,8 @@ app.use('/api/vendor/orders', orderRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
+// Before '/api/admin': that router rejects SUPER_ADMIN for everything it serves.
+app.use('/api/admin/feedback', feedbackAdminRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/vendor/analytics', analyticsRoutes);

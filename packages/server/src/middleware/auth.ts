@@ -78,6 +78,8 @@ export function requireRole(...roles: UserRole[]) {
 
 export const requireVendor = requireRole(UserRole.VENDOR, UserRole.ADMIN);
 export const requireAdmin = requireRole(UserRole.ADMIN);
+// Feedback admin routes accept both admin roles; feedbackScope() then limits what each may see.
+export const requireFeedbackAdmin = requireRole(UserRole.ADMIN, UserRole.SUPER_ADMIN);
 
 // Attaches user if token present but does not reject unauthenticated requests
 export async function optionalAuthenticate(req: AuthRequest, res: Response, next: NextFunction) {
