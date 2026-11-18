@@ -11,6 +11,7 @@ import { useAuthStore, mapUser } from '../store/authStore';
 import api from '../services/api';
 import { CONFIG } from '../config';
 import { startFeedbackQueue } from '../services/feedbackQueue';
+import { useShakeToReport } from '../services/shake';
 
 export function ErrorBoundary({ error, retry }: ErrorBoundaryProps) {
   return (
@@ -68,6 +69,7 @@ export default function RootLayout() {
 
   // Retry any review that was saved offline, on reconnect and when the app returns to the foreground.
   useEffect(() => startFeedbackQueue(), []);
+  useShakeToReport(!!user);
 
   // Last 20 route changes, kept in memory only, attached to bug reports when the user allows it.
   useEffect(() => { recordRoute(pathname); }, [pathname]);
@@ -151,6 +153,7 @@ export default function RootLayout() {
         <Stack.Screen name="feedback/app" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="feedback/mine" />
         <Stack.Screen name="feedback/changelog" />
+        <Stack.Screen name="feedback/ideas" />
       </Stack>
     </View>
   );

@@ -26,3 +26,25 @@ export async function uploadImage(
   });
   return result.secure_url;
 }
+
+/** Upload an in-memory image. Callers must check cloudinaryConfigured first. */
+export async function uploadBuffer(buf: Buffer, folder: string): Promise<{ url: string; publicId: string }> {
+  return new Promise((resolve, reject) => {
+    const stream = cloudinary.uploader.upload_stream(
+      { folder, resource_type: 'image', transformation: [{ quality: 'auto', fetch_format: 'auto' }] },
+      (err, result) => (err || !result ? reject(err ?? new Error('Upload failed')) : resolve({ url: result.secure_url, publicId: result.public_id })),
+    );
+    stream.end(buf);
+  });
+}
+
+/** Best effort: never throws. */
+export async function deleteAsset(publicId: string): Promise<boolean> {
+  if (!cloudinaryConfigured) return false;
+  try {
+    await cloudinary.uploader.destroy(publicId);
+    return true;
+  } catch {
+    return false;
+  }
+}

@@ -4,6 +4,7 @@ import { AppState } from 'react-native';
 import {
   createReview, updateReview, createAppFeedback, CreateReviewPayload, AppFeedbackPayload, MyFeedback,
 } from './feedback';
+import { uploadFeedbackPhoto, markPhotosDegraded } from './feedbackPhotos';
 
 /**
  * Offline-safe review submit. The payload (with its clientRequestId) is persisted before the
@@ -23,6 +24,8 @@ export interface QueueItem {
   /** Set for app feedback; the item is then sent to POST /feedback/app and `payload` is unused. */
   appPayload?: AppFeedbackPayload;
   feedbackId?: string; // set in edit mode
+  /** Local photo uris, uploaded as a second step once the feedback exists. */
+  photoUris?: string[];
   attempts: number;
   nextAt: number;
   createdAt: number;
@@ -101,6 +104,7 @@ async function attempt(item: QueueItem): Promise<'done' | 'retry'> {
     else feedback = await createReview(item.payload);
     await removeItem(item.orderId);
     emit({ type: 'sent', orderId: item.orderId, feedback });
+    if (item.photoUris?.length) { await enqueuePhotos(feedback.id, item.photoUris); void processPhotos(); }
     return 'done';
   } catch (err: any) {
     const status: number | undefined = err?.response?.status;
@@ -147,6 +151,7 @@ export async function processQueue(force = false) {
     if (!force && item.nextAt > now) continue;
     await attempt(item);
   }
+  await processPhotos();
   schedule();
 }
 
@@ -159,11 +164,11 @@ export type SubmitResult =
 export async function submitReview(
   orderId: string,
   payload: CreateReviewPayload,
-  opts: { feedbackId?: string } = {},
+  opts: { feedbackId?: string; photoUris?: string[] } = {},
 ): Promise<SubmitResult> {
   const list = await load();
   const item: QueueItem = {
-    orderId, mode: opts.feedbackId ? 'edit' : 'create', payload, feedbackId: opts.feedbackId,
+    orderId, mode: opts.feedbackId ? 'edit' : 'create', payload, feedbackId: opts.feedbackId, photoUris: opts.photoUris,
     attempts: 0, nextAt: 0, createdAt: Date.now(),
   };
   items = [...list.filter((i) => i.orderId !== orderId), item];
@@ -187,11 +192,11 @@ export async function submitReview(
 export const appQueueKey = (clientRequestId: string) => `app:${clientRequestId}`;
 
 /** App feedback through the same offline queue. The clientRequestId makes retries idempotent. */
-export async function submitAppFeedback(payload: AppFeedbackPayload): Promise<SubmitResult> {
+export async function submitAppFeedback(payload: AppFeedbackPayload, photoUris?: string[]): Promise<SubmitResult> {
   const key = appQueueKey(payload.clientRequestId);
   const list = await load();
   const item: QueueItem = {
-    orderId: key, mode: 'create', payload: undefined as unknown as CreateReviewPayload, appPayload: payload,
+    orderId: key, mode: 'create', payload: undefined as unknown as CreateReviewPayload, appPayload: payload, photoUris,
     attempts: 0, nextAt: 0, createdAt: Date.now(),
   };
   items = [...list.filter((i) => i.orderId !== key), item];
@@ -210,6 +215,51 @@ export async function submitAppFeedback(payload: AppFeedbackPayload): Promise<Su
       schedule();
     });
   });
+}
+
+// ---- Photos: a second step after the feedback exists. Failure here never touches the review. ----
+
+const PHOTO_QUEUE_KEY = 'feedback_photo_queue_v1';
+const PHOTO_MAX_ATTEMPTS = 5;
+
+interface PhotoJob { feedbackId: string; uri: string; attempts: number; nextAt: number }
+
+let photoBusy = false;
+
+async function loadPhotos(): Promise<PhotoJob[]> {
+  try { const raw = await AsyncStorage.getItem(PHOTO_QUEUE_KEY); return raw ? JSON.parse(raw) : []; } catch { return []; }
+}
+async function savePhotos(list: PhotoJob[]) {
+  try { await AsyncStorage.setItem(PHOTO_QUEUE_KEY, JSON.stringify(list)); } catch { /* best effort */ }
+}
+
+export async function enqueuePhotos(feedbackId: string, uris: string[]) {
+  const list = await loadPhotos();
+  await savePhotos([...list, ...uris.map((uri) => ({ feedbackId, uri, attempts: 0, nextAt: 0 }))]);
+}
+
+export async function processPhotos() {
+  if (photoBusy) return;
+  photoBusy = true;
+  try {
+    let list = await loadPhotos();
+    for (const job of [...list]) {
+      if (job.nextAt > Date.now()) continue;
+      try {
+        const res = await uploadFeedbackPhoto(job.feedbackId, job.uri);
+        if (res === 'degraded') { await markPhotosDegraded(); list = []; break; } // uploads are off: drop everything
+        list = list.filter((j) => j !== job);
+      } catch (err: any) {
+        const status: number | undefined = err?.response?.status;
+        job.attempts += 1;
+        if (isPermanentFailure(status) || job.attempts >= PHOTO_MAX_ATTEMPTS) list = list.filter((j) => j !== job);
+        else job.nextAt = Date.now() + backoffDelay(job.attempts);
+      }
+    }
+    await savePhotos(list);
+  } catch { /* never affects the review */ } finally {
+    photoBusy = false;
+  }
 }
 
 /** Call once at app start: retries on reconnect and when the app returns to the foreground. */

@@ -13,6 +13,7 @@ import { success } from '../../../components/feedback/haptics';
 import VibeDial from '../../../components/feedback/VibeDial';
 import ItemCardStack, { ItemAnswer } from '../../../components/feedback/ItemCardStack';
 import ExtrasStep from '../../../components/feedback/ExtrasStep';
+import PhotoAdder from '../../../components/feedback/PhotoAdder';
 
 type Result = null | { state: 'sent'; points: number } | { state: 'queued' } | { state: 'failed'; message: string };
 
@@ -36,6 +37,7 @@ export default function OrderReviewScreen() {
   const [skipped, setSkipped] = useState<string[]>([]);
   const [tags, setTags] = useState<string[]>([]);
   const [body, setBody] = useState('');
+  const [photos, setPhotos] = useState<string[]>([]);
   const [anonymous, setAnonymous] = useState<boolean | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<Result>(null);
@@ -109,7 +111,7 @@ export default function OrderReviewScreen() {
   const submit = async (quick: boolean) => {
     if (vibe == null || submitting) return;
     setSubmitting(true);
-    const r = await submitReview(orderId, buildPayload(quick), { feedbackId: editId ?? undefined });
+    const r = await submitReview(orderId, buildPayload(quick), { feedbackId: editId ?? undefined, photoUris: photos });
     setSubmitting(false);
     if (r.state === 'sent') {
       await clearDraft(orderId);
@@ -220,6 +222,7 @@ export default function OrderReviewScreen() {
             <View style={{ marginVertical: 16 }}>
               <ExtrasStep tags={tags} onTags={setTags} body={body} onBody={setBody}
                 anonymous={effectiveAnonymous} onAnonymous={setAnonymous} showAnonymous={!editId} lang={lang} />
+              <PhotoAdder uris={photos} onChange={setPhotos} lang={lang} />
             </View>
             <Btn label={editId ? t('update', lang) : t('submit', lang)} onPress={() => submit(false)} primary disabled={vibe == null || submitting} busy={submitting} />
             <Btn label={t('back', lang)} onPress={() => setStep(items.length ? 2 : 1)} />

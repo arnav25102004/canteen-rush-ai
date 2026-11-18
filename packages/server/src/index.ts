@@ -43,6 +43,7 @@ import { startSlotGenerationJob } from './jobs/slotGeneration.cron';
 import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
 import { startFeedbackNudgeJob } from './jobs/feedbackNudge.cron';
 import { startFeedbackSlaJob } from './jobs/feedbackSla.cron';
+import { startFeedbackRetentionJob } from './jobs/feedbackRetention.cron';
 import { startAssistantRetentionJob } from './jobs/assistantRetention.cron';
 
 const app = express();
@@ -199,7 +200,7 @@ async function bootstrap() {
   if (FEATURES.RAZORPAY_ENABLED) {
     logger.warn('RAZORPAY_ENABLED=true: cancel/no-show refunds are credited to the student wallet and do NOT reverse Razorpay Route transfers or refund the card. Reconcile vendor payouts manually.');
   }
-  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob(), startFeedbackNudgeJob(), startFeedbackSlaJob());
+  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob(), startFeedbackNudgeJob(), startFeedbackSlaJob(), startFeedbackRetentionJob());
 
   server.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);

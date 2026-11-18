@@ -4,6 +4,7 @@ import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/errors';
 import { logger } from '../utils/logger';
 import { runFeedbackAlerts } from '../services/feedbackAlerts.service';
+import { addAttachment, listIdeas, unvoteIdea, voteIdea } from '../services/feedbackExtras.service';
 import { createAppFeedbackSchema, createOrderReviewSchema, updateFeedbackSchema } from '../utils/feedbackSchemas';
 import { reportFeedback } from '../services/feedbackModerationAdmin.service';
 import {
@@ -64,6 +65,30 @@ export async function mine(req: AuthRequest, res: Response) {
 
 export async function getOne(req: AuthRequest, res: Response) {
   return res.json({ feedback: await getMine(req.user!.id, uuidParam(req.params.id)) });
+}
+
+export async function attach(req: AuthRequest, res: Response) {
+  const file = (req as any).file as { buffer: Buffer; size: number } | undefined;
+  const kind = req.body?.kind === 'SCREENSHOT' ? 'SCREENSHOT' : 'PHOTO';
+  return res.json(await addAttachment(req.user!.id, uuidParam(req.params.id), file, kind));
+}
+
+const ideasQuery = z.object({
+  limit: z.coerce.number().int().min(1).max(50).default(20),
+  cursor: z.string().max(300).optional(),
+});
+
+export async function ideas(req: AuthRequest, res: Response) {
+  const q = ideasQuery.parse(req.query);
+  return res.json(await listIdeas(req.user!.id, req.user!.institutionId, q.limit, q.cursor));
+}
+
+export async function vote(req: AuthRequest, res: Response) {
+  return res.json(await voteIdea(req.user!.id, req.user!.institutionId, uuidParam(req.params.id)));
+}
+
+export async function unvote(req: AuthRequest, res: Response) {
+  return res.json(await unvoteIdea(req.user!.id, req.user!.institutionId, uuidParam(req.params.id)));
 }
 
 export async function report(req: AuthRequest, res: Response) {

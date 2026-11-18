@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { View, Text, ScrollView, TextInput, TouchableOpacity, Switch, StyleSheet, ActivityIndicator } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppFeedbackKind, AppSeverity, newRequestId } from '../../services/feedback';
 import { submitAppFeedback } from '../../services/feedbackQueue';
@@ -8,6 +8,7 @@ import { collectDiagnostics, Diagnostics } from '../../services/diagnostics';
 import { CopyKey, NOTE_MAX, t } from '../../components/feedback/copy';
 import { useFeedbackLang } from '../../components/feedback/hooks';
 import { success } from '../../components/feedback/haptics';
+import PhotoAdder from '../../components/feedback/PhotoAdder';
 
 const KINDS: { kind: AppFeedbackKind; label: CopyKey; icon: string; placeholder: CopyKey }[] = [
   { kind: 'APP_BUG', label: 'kindBug', icon: '🐞', placeholder: 'appPlaceholderBug' },
@@ -27,7 +28,9 @@ const letters = (s: string) => (s.match(/\p{L}/gu) ?? []).length;
 export default function AppFeedbackScreen() {
   const router = useRouter();
   const [lang, toggleLang] = useFeedbackLang();
-  const [kind, setKind] = useState<AppFeedbackKind>('APP_BUG');
+  const params = useLocalSearchParams<{ kind?: string }>();
+  const [kind, setKind] = useState<AppFeedbackKind>(KINDS.some((k) => k.kind === params.kind) ? (params.kind as AppFeedbackKind) : 'APP_BUG');
+  const [photos, setPhotos] = useState<string[]>([]);
   const [body, setBody] = useState('');
   const [severity, setSeverity] = useState<AppSeverity>('ANNOYING');
   const [withDiag, setWithDiag] = useState(true);
@@ -55,7 +58,7 @@ export default function AppFeedbackScreen() {
       severity: kind === 'APP_BUG' ? severity : undefined,
       isAnonymous: anonymous,
       contextJson: kind === 'APP_BUG' && withDiag && diag ? { ...diag } : undefined,
-    });
+    }, photos);
     setSubmitting(false);
     if (res.state === 'failed') {
       if (res.code === 'APP_FEEDBACK_DAILY_CAP') setError(t('appCapReached', lang));
@@ -125,6 +128,7 @@ export default function AppFeedbackScreen() {
         <Text style={s.counter}>{body.length}/{NOTE_MAX}</Text>
         {!enough && body.length > 0 && needsLetters ? <Text style={s.warn}>{t('appMinLetters', lang)}</Text> : null}
         <Text style={s.hint}>{t('piiHint', lang)}</Text>
+        <PhotoAdder uris={photos} onChange={setPhotos} lang={lang} />
 
         {kind === 'APP_BUG' && (
           <View style={{ marginTop: 16 }}>

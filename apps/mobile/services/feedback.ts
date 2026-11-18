@@ -148,3 +148,28 @@ export function newRequestId(): string {
     return (c === 'x' ? r : (r & 0x3) | 0x8).toString(16);
   });
 }
+
+export interface Idea {
+  id: string;
+  text: string;
+  voteCount: number;
+  voted: boolean;
+  status: string;
+  mine: boolean;
+  createdAt: string;
+}
+
+export async function listIdeas(cursor?: string): Promise<{ ideas: Idea[]; nextCursor: string | null }> {
+  const { data } = await api.get('/feedback/ideas', { params: { cursor, limit: 20 } });
+  return { ideas: data.ideas ?? [], nextCursor: data.nextCursor ?? null };
+}
+
+export async function voteIdea(id: string): Promise<{ voted: boolean; voteCount: number }> {
+  const { data } = await api.post(`/feedback/${id}/vote`);
+  return data;
+}
+
+export async function unvoteIdea(id: string): Promise<{ voted: boolean; voteCount: number }> {
+  const { data } = await api.delete(`/feedback/${id}/vote`);
+  return data;
+}

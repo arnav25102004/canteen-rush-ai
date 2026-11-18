@@ -31,6 +31,7 @@ export interface ListFilters {
   flagged?: boolean;
   assignee?: string; // user id
   needsAttention?: boolean;
+  sort?: 'recent' | 'votes';
   limit: number;
   cursor?: string;
 }
@@ -40,15 +41,17 @@ export function istDayStart(day: string): Date {
   return new Date(`${day}T00:00:00+05:30`);
 }
 
-export function encodeCursor(createdAt: Date, id: string): string {
-  return Buffer.from(`${createdAt.toISOString()}|${id}`).toString('base64url');
+export function encodeCursor(createdAt: Date, id: string, votes?: number): string {
+  return Buffer.from(`${createdAt.toISOString()}|${id}${votes != null ? `|${votes}` : ''}`).toString('base64url');
 }
-export function decodeCursor(c: string): { createdAt: Date; id: string } {
+export function decodeCursor(c: string): { createdAt: Date; id: string; votes?: number } {
   try {
-    const [iso, id] = Buffer.from(c, 'base64url').toString('utf8').split('|');
+    const [iso, id, v] = Buffer.from(c, 'base64url').toString('utf8').split('|');
     const createdAt = new Date(iso);
     if (!id || Number.isNaN(createdAt.getTime())) throw new Error('bad');
-    return { createdAt, id };
+    const votes = v === undefined ? undefined : Number(v);
+    if (votes !== undefined && !Number.isInteger(votes)) throw new Error('bad');
+    return { createdAt, id, votes };
   } catch {
     throw new AppError(400, 'Invalid cursor');
   }
@@ -89,7 +92,17 @@ export function buildListWhere(scope: AdminScope, f: ListFilters): Prisma.Feedba
   }
   if (f.cursor) {
     const c = decodeCursor(f.cursor);
-    and.push({ OR: [{ createdAt: { lt: c.createdAt } }, { createdAt: c.createdAt, id: { lt: c.id } }] });
+    if (f.sort === 'votes' && c.votes !== undefined) {
+      and.push({
+        OR: [
+          { voteCount: { lt: c.votes } },
+          { voteCount: c.votes, createdAt: { lt: c.createdAt } },
+          { voteCount: c.votes, createdAt: c.createdAt, id: { lt: c.id } },
+        ],
+      });
+    } else {
+      and.push({ OR: [{ createdAt: { lt: c.createdAt } }, { createdAt: c.createdAt, id: { lt: c.id } }] });
+    }
   }
   if (and.length) where.AND = and;
   // Scope last: a client-supplied canteenId can narrow the scope but never replace it.
@@ -106,17 +119,17 @@ export async function listFeedback(scope: AdminScope, f: ListFilters) {
   const where = buildListWhere(scope, f);
   const rows = await prisma.feedback.findMany({
     where,
-    orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+    orderBy: f.sort === 'votes' ? [{ voteCount: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] : [{ createdAt: 'desc' }, { id: 'desc' }],
     take: f.limit + 1,
     select: {
       id: true, kind: true, status: true, priority: true, moderation: true, overallRating: true, tags: true,
-      body: true, isAnonymous: true, assignedTo: true, createdAt: true, slaDueAt: true,
+      body: true, isAnonymous: true, assignedTo: true, createdAt: true, slaDueAt: true, voteCount: true,
       canteen: { select: { id: true, name: true } },
       _count: { select: { attachments: true } },
     },
   });
   const page = rows.slice(0, f.limit);
-  const nextCursor = rows.length > f.limit ? encodeCursor(page[page.length - 1].createdAt, page[page.length - 1].id) : null;
+  const nextCursor = rows.length > f.limit ? encodeCursor(page[page.length - 1].createdAt, page[page.length - 1].id, f.sort === 'votes' ? page[page.length - 1].voteCount : undefined) : null;
 
   const assigneeIds = [...new Set(page.map((r) => r.assignedTo).filter((x): x is string => !!x))];
   const assignees = assigneeIds.length
@@ -129,7 +142,7 @@ export async function listFeedback(scope: AdminScope, f: ListFilters) {
       id: r.id, kind: r.kind, status: r.status, priority: r.priority, flagged: r.moderation === FeedbackModeration.FLAGGED,
       overallRating: r.overallRating, tags: r.tags, snippet: snippet(r.body), isAnonymous: r.isAnonymous,
       canteen: r.canteen, assignedTo: r.assignedTo, assigneeName: r.assignedTo ? names.get(r.assignedTo) ?? null : null,
-      createdAt: r.createdAt, slaDueAt: r.slaDueAt, photoCount: r._count.attachments,
+      createdAt: r.createdAt, slaDueAt: r.slaDueAt, photoCount: r._count.attachments, voteCount: r.voteCount,
     })),
     nextCursor,
   };
@@ -214,13 +227,13 @@ export async function getFeedbackDetail(scope: AdminScope, id: string, actorId: 
       overallRating: fb.overallRating, tags: fb.tags, body: fb.body, isAnonymous: fb.isAnonymous,
       orderId: fb.orderId, canteen, assignee, duplicateOfId: fb.duplicateOfId,
       contextJson: fb.contextJson, firstSeenAt: fb.firstSeenAt, slaDueAt: fb.slaDueAt, resolvedAt: fb.resolvedAt,
-      editedAt: fb.editedAt, createdAt: fb.createdAt,
+      editedAt: fb.editedAt, createdAt: fb.createdAt, voteCount: fb.voteCount,
       // Never present for anonymous feedback, whatever the caller's role.
       author: fb.isAnonymous ? null : user,
       items: ratings.map((r) => ({
         menuItemId: r.menuItemId, name: r.menuItem?.name ?? null, rating: r.rating, taste: r.taste, portion: r.portion, value: r.value, tags: r.tags,
       })),
-      attachments: attachments.map((a) => ({ id: a.id, url: a.url, status: a.status })),
+      attachments: attachments.map((a) => ({ id: a.id, url: a.url, status: a.status, kind: a.kind })),
       timeline: events.map((e) => ({
         id: e.id, type: e.type, fromStatus: e.fromStatus, toStatus: e.toStatus, note: e.note, isInternal: e.isInternal,
         data: e.data, actorId: e.actorId, createdAt: e.createdAt,
