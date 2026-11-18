@@ -131,7 +131,13 @@ export default function RootLayout() {
     <ThemeProvider>
       <View style={{ flex: 1 }}>
         <OfflineBanner />
-        <Stack screenOptions={{ headerShown: false }}>
+        <Stack
+          screenOptions={{
+            headerShown: false,
+            navigationBarTranslucent: true,
+            navigationBarColor: 'transparent',
+          }}
+        >
           <Stack.Screen name="select-institution" />
           <Stack.Screen name="(auth)" />
           <Stack.Screen name="(tabs)" />
