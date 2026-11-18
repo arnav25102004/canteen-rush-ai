@@ -5,6 +5,7 @@ import { AppError } from '../utils/errors';
 import { logger } from '../utils/logger';
 import { runFeedbackAlerts } from '../services/feedbackAlerts.service';
 import { createAppFeedbackSchema, createOrderReviewSchema, updateFeedbackSchema } from '../utils/feedbackSchemas';
+import { reportFeedback } from '../services/feedbackModerationAdmin.service';
 import {
   createAppFeedback, createOrderReview, deleteOrderReview, getEligibility, getMine, listMine, updateOrderReview,
 } from '../services/feedback.service';
@@ -63,4 +64,9 @@ export async function mine(req: AuthRequest, res: Response) {
 
 export async function getOne(req: AuthRequest, res: Response) {
   return res.json({ feedback: await getMine(req.user!.id, uuidParam(req.params.id)) });
+}
+
+export async function report(req: AuthRequest, res: Response) {
+  const { reason } = z.object({ reason: z.string().min(3).max(300) }).parse(req.body);
+  return res.status(201).json(await reportFeedback(req.user!.id, uuidParam(req.params.id), reason));
 }

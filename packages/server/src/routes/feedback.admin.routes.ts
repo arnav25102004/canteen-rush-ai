@@ -1,6 +1,7 @@
 import { Router } from '../utils/router';
 import { authenticate, requireFeedbackAdmin } from '../middleware/auth';
-import { list, stats, detail, patch, note, reply } from '../controllers/feedback.admin.controller';
+import { userLimiter } from '../middleware/rateLimit';
+import { list, stats, detail, patch, note, reply, reports, moderate, bulk, dashboard, exportCsv } from '../controllers/feedback.admin.controller';
 
 const router = Router();
 
@@ -8,10 +9,16 @@ const router = Router();
 router.use(authenticate, requireFeedbackAdmin);
 
 router.get('/', list);
-router.get('/stats', stats); // before '/:id'
+// Fixed paths before '/:id'.
+router.get('/stats', stats);
+router.get('/stats/dashboard', dashboard);
+router.get('/reports', reports);
+router.get('/export.csv', userLimiter('feedback-export', 60 * 60 * 1000, 5), exportCsv);
+router.post('/bulk', bulk);
 router.get('/:id', detail);
 router.patch('/:id', patch);
 router.post('/:id/notes', note);
 router.post('/:id/reply', reply);
+router.post('/:id/moderate', moderate);
 
 export default router;

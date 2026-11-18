@@ -33,6 +33,7 @@ import analyticsRoutes from './routes/analytics.routes';
 import institutionRoutes from './routes/institution.routes';
 import loyaltyRoutes from './routes/loyalty.routes';
 import feedbackRoutes from './routes/feedback.routes';
+import assistantRoutes from './routes/assistant.routes';
 import { globalErrorHandler } from './middleware/errorHandler';
 import { globalLimiter, authLimiter, forgotPasswordLimiter } from './middleware/rateLimit';
 
@@ -42,6 +43,7 @@ import { startSlotGenerationJob } from './jobs/slotGeneration.cron';
 import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
 import { startFeedbackNudgeJob } from './jobs/feedbackNudge.cron';
 import { startFeedbackSlaJob } from './jobs/feedbackSla.cron';
+import { startAssistantRetentionJob } from './jobs/assistantRetention.cron';
 
 const app = express();
 const server = http.createServer(app);
@@ -157,6 +159,7 @@ app.use('/api/vendor/analytics', analyticsRoutes);
 app.use('/api/institutions', institutionRoutes);
 app.use('/api/loyalty', loyaltyRoutes);
 app.use('/api/feedback', feedbackRoutes);
+app.use('/api/assistant', assistantRoutes);
 
 // Setup Socket.IO
 setupSocketIO(io);
@@ -196,7 +199,7 @@ async function bootstrap() {
   if (FEATURES.RAZORPAY_ENABLED) {
     logger.warn('RAZORPAY_ENABLED=true: cancel/no-show refunds are credited to the student wallet and do NOT reverse Razorpay Route transfers or refund the card. Reconcile vendor payouts manually.');
   }
-  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startFeedbackNudgeJob(), startFeedbackSlaJob());
+  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob(), startFeedbackNudgeJob(), startFeedbackSlaJob());
 
   server.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);

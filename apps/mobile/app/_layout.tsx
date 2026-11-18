@@ -145,6 +145,7 @@ export default function RootLayout() {
         <Stack.Screen name="canteen/[id]" options={{ headerShown: true, title: '' }} />
         <Stack.Screen name="cart" options={{ headerShown: true, title: 'Cart' }} />
         <Stack.Screen name="checkout" options={{ headerShown: true, title: 'Checkout' }} />
+        <Stack.Screen name="assistant" options={{ headerShown: true, title: 'Khana Assistant' }} />
         <Stack.Screen name="order/[id]" options={{ headerShown: true, title: 'Order Tracking' }} />
         <Stack.Screen name="feedback/order/[orderId]" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="feedback/app" options={{ presentation: 'fullScreenModal' }} />

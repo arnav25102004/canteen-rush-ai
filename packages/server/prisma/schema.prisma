@@ -74,6 +74,9 @@ model User {
   vendorCanteen  Canteen?       @relation("VendorCanteen")
   notifications  Notification[]
   loyaltyAccount LoyaltyAccount?
+  assistantConversations AssistantConversation[]
+  assistantProposals     AssistantProposal[]
+  assistantReports       AssistantReport[]
 
   @@index([institutionId])
   @@map("users")
@@ -635,6 +638,18 @@ model FeedbackIdentityReveal {
   @@map("feedback_identity_reveals")
 }
 
+// One row per CSV export of feedback, written before streaming starts.
+model FeedbackExportAudit {
+  id          String   @id @default(uuid())
+  actorId     String   @map("actor_id")
+  filtersJson Json     @map("filters_json")
+  rowCount    Int      @default(0) @map("row_count")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([actorId, createdAt])
+  @@map("feedback_export_audits")
+}
+
 model Favorite {
   id         String   @id @default(uuid())
   userId     String   @map("user_id")
@@ -692,4 +707,141 @@ model OrderCounter {
   seq  Int    @default(0)
 
   @@map("order_counters")
+}
+
+// ============================================================
+// AI ASSISTANT (keep this block at the end of the file)
+// ============================================================
+
+enum AssistantMessageRole {
+  USER
+  ASSISTANT
+}
+
+enum AssistantProposalStatus {
+  PROPOSED
+  HANDED_OFF
+  SUPERSEDED
+  EXPIRED
+}
+
+enum AssistantReportStatus {
+  OPEN
+  REVIEWED
+  DISMISSED
+}
+
+model AssistantConversation {
+  id        String   @id @default(uuid())
+  userId    String   @map("user_id")
+  // Short ref -> real id map (c1/m4/s2/p1), capped server-side.
+  refs      Json     @default("{}")
+  // One turn at a time per conversation: a turn holds the lock until this time.
+  busyUntil DateTime? @map("busy_until")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  user      User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages  AssistantMessage[]
+  proposals AssistantProposal[]
+
+  @@index([userId, updatedAt])
+  @@map("assistant_conversations")
+}
+
+model AssistantMessage {
+  id             String               @id @default(uuid())
+  conversationId String               @map("conversation_id")
+  role           AssistantMessageRole
+  text           String
+  cards          Json?
+  chips          Json?
+  // Client-generated idempotency key; a replay returns the stored reply.
+  clientTurnId   String?              @map("client_turn_id")
+  // For an ASSISTANT message: the USER message it answers.
+  replyToId      String?              @map("reply_to_id")
+  outcome        String?
+  reportedAt     DateTime?            @map("reported_at")
+  createdAt      DateTime             @default(now()) @map("created_at")
+
+  conversation AssistantConversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  reports      AssistantReport[]
+
+  @@unique([conversationId, clientTurnId, role])
+  @@index([conversationId, createdAt])
+  @@index([createdAt])
+  @@map("assistant_messages")
+}
+
+model AssistantProposal {
+  id             String                  @id @default(uuid())
+  userId         String                  @map("user_id")
+  conversationId String?                 @map("conversation_id")
+  canteenId      String                  @map("canteen_id")
+  // [{ menuItemId, quantity }] snapshot; prices are re-quoted at hand-off.
+  items          Json
+  subtotal       Decimal                 @db.Decimal(10, 2)
+  slotId         String?                 @map("slot_id")
+  status         AssistantProposalStatus @default(PROPOSED)
+  expiresAt      DateTime                @map("expires_at")
+  handedOffAt    DateTime?               @map("handed_off_at")
+  createdAt      DateTime                @default(now()) @map("created_at")
+
+  user         User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  conversation AssistantConversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, status])
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("assistant_proposals")
+}
+
+// Usage ledger. Holds no message content: hashes and counts only.
+model AssistantCallLog {
+  id             String   @id @default(uuid())
+  // Nulled when the account is deleted.
+  userId         String?  @map("user_id")
+  conversationId String?  @map("conversation_id")
+  kind           String   // "LLM" | "TOOL" | "TURN"
+  name           String   // model id or tool name
+  status         String   // ok | rate_limited | error | timeout | refused ...
+  latencyMs      Int      @default(0) @map("latency_ms")
+  promptTokens   Int      @default(0) @map("prompt_tokens")
+  completionTokens Int    @default(0) @map("completion_tokens")
+  argsSha256     String?  @map("args_sha256")
+  groundingDrops Int      @default(0) @map("grounding_drops")
+  resultBytes    Int?     @map("result_bytes")
+  toolsOffered   Int?     @map("tools_offered")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@index([createdAt])
+  @@index([userId, createdAt])
+  @@map("assistant_call_logs")
+}
+
+// scope: a user id, "global", or "model:<id>"; day is an IST date key (YYYY-MM-DD).
+model AssistantDailyUsage {
+  scope  String
+  day    String
+  turns  Int    @default(0)
+  tokens Int    @default(0)
+
+  @@id([scope, day])
+  @@map("assistant_daily_usage")
+}
+
+model AssistantReport {
+  id        String                @id @default(uuid())
+  userId    String                @map("user_id")
+  messageId String?               @map("message_id")
+  reason    String?
+  status    AssistantReportStatus @default(OPEN)
+  createdAt DateTime              @default(now()) @map("created_at")
+
+  user    User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  message AssistantMessage? @relation(fields: [messageId], references: [id], onDelete: SetNull)
+
+  @@index([status, createdAt])
+  @@index([messageId])
+  @@map("assistant_reports")
 }

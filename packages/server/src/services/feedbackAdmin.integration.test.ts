@@ -31,15 +31,15 @@ describe.skipIf(!url)('admin feedback (Postgres)', async () => {
   }
 
   beforeAll(async () => {
-    const inst = await prisma.institution.create({ data: { name: tag, slug: tag, emailDomain: `${tag}.edu` } as any });
-    const other = await prisma.institution.create({ data: { name: `${tag}o`, slug: `${tag}o`, emailDomain: `${tag}o.edu` } as any });
+    const inst = await prisma.institution.create({ data: { name: tag, slug: tag, emailDomain: `${tag}.test` } as any });
+    const other = await prisma.institution.create({ data: { name: `${tag}o`, slug: `${tag}o`, emailDomain: `${tag}o.test` } as any });
     instId = inst.id; otherInstId = other.id;
     const mk = (role: string, n: string, institutionId = instId) => prisma.user.create({
       data: { firebaseUid: `${tag}-${n}`, email: `${tag}-${n}@t.in`, name: n, role, institutionId } as any,
     });
     adminId = (await mk('ADMIN', 'admin')).id;
     studentId = (await mk('STUDENT', 'student')).id;
-    canteenId = (await prisma.canteen.create({ data: { name: tag, campus: 'C', openingTime: '07:00', closingTime: '20:00', institutionId: instId } as any })).id;
+    canteenId = (await prisma.canteen.create({ data: { name: tag, campus: "C", openingTime: "07:00", closingTime: "20:00", institutionId: instId } as any })).id;
   });
 
   afterAll(async () => {

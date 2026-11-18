@@ -1,8 +1,9 @@
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator, Alert, AppState } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import api from '../../services/api';
+import { getCapabilities } from '../../services/assistant';
 import { useCartStore } from '../../store/cartStore';
 import { useAuthStore } from '../../store/authStore';
 import { getChangelog, ChangelogEntry } from '../../services/feedback';
@@ -26,7 +27,6 @@ interface LastOrder {
 
 export default function HomeScreen() {
   const router = useRouter();
-  const { addItem, clear } = useCartStore();
   const { institution, switchInstitution } = useAuthStore();
   const [canteens, setCanteens] = useState<Canteen[]>([]);
   const [filtered, setFiltered] = useState<Canteen[]>([]);
@@ -35,6 +35,7 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [topRated, setTopRated] = useState(false);
   const [changelog, setChangelog] = useState<ChangelogEntry | null>(null);
+  const [assistantOn, setAssistantOn] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   function fetchCanteens() {
@@ -88,6 +89,13 @@ export default function HomeScreen() {
     try { await AsyncStorage.setItem(DISMISS_KEY(id), '1'); } catch { /* shows again next time */ }
   }
 
+  // The button shows only when the server says the assistant is enabled (hidden on 404 or any error).
+  useFocusEffect(useCallback(() => {
+    let live = true;
+    getCapabilities().then(c => { if (live) setAssistantOn(!!c.enabled); }).catch(() => { if (live) setAssistantOn(false); });
+    return () => { live = false; };
+  }, []));
+
   function reorderLast() {
     if (!lastOrder) return;
     if (!lastOrder.canteen.isActive) {
@@ -99,19 +107,17 @@ export default function HomeScreen() {
       Alert.alert('Items Unavailable', `${unavailable.map(i => i.menuItem.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} no longer available.`);
       return;
     }
-    clear();
-    lastOrder.items.forEach(i => {
-      addItem(lastOrder.canteen.id, lastOrder.canteen.name, {
+    useCartStore.getState().replaceCart(
+      lastOrder.canteen.id,
+      lastOrder.canteen.name,
+      lastOrder.items.map(i => ({
         menuItemId: i.menuItem.id,
         name: i.menuItem.name,
         price: Number(i.menuItem.price),
         isVeg: i.menuItem.isVeg ?? true,
-      });
-      // Adjust quantity if > 1
-      if (i.quantity > 1) {
-        useCartStore.getState().updateQty(i.menuItem.id, i.quantity);
-      }
-    });
+        quantity: i.quantity,
+      })),
+    );
     router.push('/checkout');
   }
 
@@ -203,11 +209,18 @@ export default function HomeScreen() {
           </TouchableOpacity>
         )}
       />
+      {assistantOn && (
+        <TouchableOpacity style={styles.fab} onPress={() => router.push('/assistant')} accessibilityRole="button" accessibilityLabel="Order with assistant">
+          <Text style={styles.fabText}>Order with assistant</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
+  fab: { position: 'absolute', right: 16, bottom: 20, backgroundColor: '#e94560', borderRadius: 28, paddingHorizontal: 18, paddingVertical: 14, elevation: 6 },
+  fabText: { color: '#fff', fontWeight: '700', fontSize: 14 },
   container: { flex: 1, backgroundColor: '#f8f9fa' },
   center: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   instBanner: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#1a1a2e', paddingHorizontal: 16, paddingVertical: 12 },

@@ -18,6 +18,7 @@ const adminLinks = [
   { href: '/admin/canteens', label: 'Canteens', icon: '🏪' },
   { href: '/admin/vendors', label: 'Vendors', icon: '👤' },
   { href: '/admin/feedback', label: 'Feedback', icon: '💬' },
+  { href: '/admin/feedback/dashboard', label: 'Feedback insights', icon: '📉' },
   { href: '/admin/changelog', label: 'You said, we did', icon: '✅' },
   { href: '/admin/users', label: 'Users', icon: '👥' },
   { href: '/admin/settlements', label: 'Settlements', icon: '💰' },
@@ -66,7 +67,9 @@ export default function Sidebar() {
           <Link
             key={link.href} href={link.href}
             className={`flex items-center gap-3 px-4 py-3 rounded-lg transition text-sm ${
-              pathname.startsWith(link.href)
+              (link.href === '/admin/feedback'
+                ? pathname.startsWith(link.href) && !pathname.startsWith('/admin/feedback/dashboard')
+                : pathname.startsWith(link.href))
                 ? 'bg-[#e94560] text-white'
                 : 'text-white/70 hover:bg-white/10'
             }`}
