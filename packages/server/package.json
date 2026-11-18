@@ -5,7 +5,7 @@
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/index.ts",
     "build": "npx prisma generate && node build.js",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "tsc --noEmit && tsc --noEmit -p tsconfig.evals.json",
     "start": "node dist/index.js",
     "migrate": "prisma migrate dev",
     "migrate:deploy": "prisma migrate deploy",
@@ -13,6 +13,7 @@
     "studio": "prisma studio",
     "generate": "prisma generate",
     "test": "vitest run",
+    "eval:assistant": "ts-node --transpile-only --project tsconfig.evals.json evals/assistant/run.ts",
     "test:watch": "vitest",
     "verify-existing-users": "ts-node --project tsconfig.seed.json prisma/mark-existing-users-verified.ts"
   },
