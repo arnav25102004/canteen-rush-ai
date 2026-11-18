@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest, canteenScope } from '../middleware/auth';
 import { uploadImage, cloudinaryConfigured } from '../config/cloudinary';
+import { getCanteenMenuData } from '../services/menu.service';
 import { z } from 'zod';
 import fs from 'fs';
 
@@ -35,30 +36,7 @@ const menuItemSchema = z.object({
 export async function getCanteenMenu(req: Request, res: Response) {
   const { id: canteenId } = req.params;
   const { diet } = req.query; // "veg", "jain", "noegg"
-
-  const categories = await prisma.menuCategory.findMany({
-    where: { canteenId, isActive: true },
-    orderBy: { sortOrder: 'asc' },
-    include: {
-      items: {
-        where: {
-          isAvailable: true,
-          ...(diet === 'veg' ? { isVeg: true } : {}),
-          ...(diet === 'jain' ? { isJain: true } : {}),
-          ...(diet === 'noegg' ? { containsEgg: false } : {}),
-        },
-        orderBy: [{ sortOrder: 'asc' }, { totalOrders: 'desc' }],
-      },
-    },
-  });
-
-  const popular = await prisma.menuItem.findMany({
-    where: { canteenId, isAvailable: true, isPopular: true },
-    orderBy: { totalOrders: 'desc' },
-    take: 5,
-  });
-
-  return res.json({ categories, popular });
+  return res.json(await getCanteenMenuData(canteenId, typeof diet === 'string' ? diet : null));
 }
 
 export async function searchMenuInCanteen(req: Request, res: Response) {
