@@ -12,6 +12,7 @@ export interface AuthRequest extends Request {
     name: string;
     role: UserRole;
     canteenId?: string;
+    institutionId?: string | null;
   };
   io?: any;
 }
@@ -59,6 +60,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     name: user.name,
     role: user.role,
     canteenId: user.vendorCanteen?.id,
+    institutionId: user.institutionId,
   };
 
   next();
@@ -99,6 +101,7 @@ export async function optionalAuthenticate(req: AuthRequest, res: Response, next
       name: user.name,
       role: user.role,
       canteenId: user.vendorCanteen?.id,
+      institutionId: user.institutionId,
     };
   }
   next();
@@ -112,4 +115,18 @@ export async function optionalAuthenticate(req: AuthRequest, res: Response, next
 export function canteenScope(req: AuthRequest): { canteenId?: string } | null {
   if (req.user?.role === UserRole.ADMIN) return {};
   return req.user?.canteenId ? { canteenId: req.user.canteenId } : null;
+}
+
+/**
+ * Prisma `where` fragment limiting feedback to what the caller may see: an ADMIN to their
+ * institution, a SUPER_ADMIN to everything ({}), a VENDOR to their own canteen. Everyone
+ * else (and an admin or vendor with no institution or canteen) gets null: answer 403.
+ */
+export function feedbackScope(req: AuthRequest): { institutionId?: string; canteenId?: string } | null {
+  const u = req.user;
+  if (!u) return null;
+  if (u.role === UserRole.SUPER_ADMIN) return {};
+  if (u.role === UserRole.ADMIN) return u.institutionId ? { institutionId: u.institutionId } : null;
+  if (u.role === UserRole.VENDOR) return u.canteenId ? { canteenId: u.canteenId } : null;
+  return null;
 }

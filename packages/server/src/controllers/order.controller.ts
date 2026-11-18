@@ -86,7 +86,7 @@ export async function getOrder(req: AuthRequest, res: Response) {
       canteen: { select: { id: true, name: true, imageUrl: true, location: true, vendorUpiId: true, vendorUpiName: true } },
       slot: true,
       items: { include: { menuItem: { select: { name: true, imageUrl: true, price: true } } } },
-      rating: true,
+      ratings: true,
     },
   });
 
@@ -96,7 +96,8 @@ export async function getOrder(req: AuthRequest, res: Response) {
   const isThisCanteensVendor = req.user!.role === UserRole.VENDOR && order.canteen.id === req.user!.canteenId;
   if (!isOwner && !isAdmin && !isThisCanteensVendor) return res.status(403).json({ error: 'Forbidden' });
 
-  return res.json({ order });
+  // `rating` (first rating) stays for older app versions for one release; new clients use `ratings`.
+  return res.json({ order: { ...order, rating: order.ratings[0] ?? null } });
 }
 
 export async function getOrderQR(req: AuthRequest, res: Response) {
