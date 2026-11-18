@@ -27,6 +27,7 @@ import paymentRoutes from './routes/payment.routes';
 import notificationRoutes from './routes/notification.routes';
 import adminRoutes from './routes/admin.routes';
 import feedbackAdminRoutes from './routes/feedback.admin.routes';
+import feedbackVendorRoutes from './routes/feedback.vendor.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import institutionRoutes from './routes/institution.routes';
 import loyaltyRoutes from './routes/loyalty.routes';
@@ -39,6 +40,8 @@ import { globalLimiter, authLimiter, forgotPasswordLimiter } from './middleware/
 import { FEATURES } from './config/features';
 import { startSlotGenerationJob } from './jobs/slotGeneration.cron';
 import { startAutoCancelJob } from './jobs/autoCancelOrders.cron';
+import { startFeedbackNudgeJob } from './jobs/feedbackNudge.cron';
+import { startFeedbackSlaJob } from './jobs/feedbackSla.cron';
 import { startAssistantRetentionJob } from './jobs/assistantRetention.cron';
 
 const app = express();
@@ -146,6 +149,8 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 // Before '/api/admin': that router rejects SUPER_ADMIN for everything it serves.
 app.use('/api/admin/feedback', feedbackAdminRoutes);
+// Before '/api/vendor' (menu routes): the anonymised vendor feedback view is VENDOR-only.
+app.use('/api/vendor/feedback', feedbackVendorRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/analytics', analyticsRoutes);
 app.use('/api/vendor/analytics', analyticsRoutes);
@@ -192,7 +197,7 @@ async function bootstrap() {
   if (FEATURES.RAZORPAY_ENABLED) {
     logger.warn('RAZORPAY_ENABLED=true: cancel/no-show refunds are credited to the student wallet and do NOT reverse Razorpay Route transfers or refund the card. Reconcile vendor payouts manually.');
   }
-  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob());
+  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob(), startFeedbackNudgeJob(), startFeedbackSlaJob());
 
   server.listen(PORT, () => {
     logger.info(`Server running on http://localhost:${PORT}`);

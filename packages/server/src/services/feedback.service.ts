@@ -44,10 +44,14 @@ export function studentView(fb: any, ratings?: any[]) {
     })),
     // Only what the author may read: status changes and public replies. No actor, no notes, no reasons.
     timeline: (fb.events ?? [])
-      .filter((e: any) => !e.isInternal && (e.type === 'status_changed' || e.type === 'reply'))
-      .map((e: any) => ({
-        type: e.type, toStatus: e.toStatus ?? null, reply: e.type === 'reply' ? e.note : null, createdAt: e.createdAt,
-      })),
+      .filter((e: any) => !e.isInternal && (e.type === 'status_changed' || e.type === 'reply' || e.type === 'REPLY_PUBLIC'))
+      .map((e: any) => {
+        const isReply = e.type === 'reply' || e.type === 'REPLY_PUBLIC';
+        return {
+          type: isReply ? 'reply' : e.type, toStatus: e.toStatus ?? null, reply: isReply ? e.note : null,
+          from: e.type === 'REPLY_PUBLIC' ? 'canteen' : undefined, createdAt: e.createdAt,
+        };
+      }),
   };
 }
 

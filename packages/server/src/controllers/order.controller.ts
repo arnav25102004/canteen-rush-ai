@@ -6,6 +6,7 @@ import { awardPointsForOrder } from '../services/loyalty.service';
 import { verifyQRToken, generateQRCodeDataURL } from '../services/qr.service';
 import { sendOrderNotification } from '../services/notification.service';
 import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '../utils/helpers';
+import { computeNudgeAt } from '../utils/feedbackNudge';
 import { z } from 'zod';
 import { OrderStatus, UserRole } from '@prisma/client';
 
@@ -211,12 +212,14 @@ export async function scanQR(req: AuthRequest, res: Response) {
 
   // Atomic hand-over: a QR can only be redeemed once even if scanned twice at once.
   // Cash orders are paid at this moment, at the counter.
+  const pickedUpAt = new Date();
   const { count } = await prisma.order.updateMany({
     where: { id, status: OrderStatus.READY, qrScanned: false },
     data: {
       status: OrderStatus.PICKED_UP,
       qrScanned: true,
-      pickedUpAt: new Date(),
+      pickedUpAt,
+      feedbackNudgeAt: computeNudgeAt(pickedUpAt),
       ...(order.paymentMethod === 'CASH' ? { paymentStatus: 'PAID' as const, paymentVerifiedAt: new Date() } : {}),
     },
   });
