@@ -37,6 +37,7 @@ model Institution {
   canteens      Canteen[]
   users         User[]
   announcements Announcement[]
+  feedbacks     Feedback[]
 
   @@map("institutions")
 }
@@ -68,6 +69,7 @@ model User {
   wallet         Wallet?
   orders         Order[]
   ratings        Rating[]
+  feedbacks      Feedback[]
   favorites      Favorite[]
   vendorCanteen  Canteen?       @relation("VendorCanteen")
   notifications  Notification[]
@@ -98,6 +100,9 @@ model Canteen {
   vendorUpiName     String?  @map("vendor_upi_name")       // "Punjabi Bites"
   razorpayAccountId String?  @map("razorpay_account_id")   // "acc_XXXXXXXXXX" from Razorpay Route
   institutionId     String   @map("institution_id")
+  ratingSum         Int      @default(0) @map("rating_sum")
+  totalRatings      Int      @default(0) @map("total_ratings")
+  avgRating         Decimal  @default(0) @db.Decimal(2, 1) @map("avg_rating")
   createdAt     DateTime @default(now()) @map("created_at")
   updatedAt     DateTime @updatedAt @map("updated_at")
 
@@ -110,6 +115,8 @@ model Canteen {
   orders        Order[]
   announcements Announcement[]
   settlements   DailySettlement[]
+  ratings       Rating[]
+  feedbacks     Feedback[]
 
   @@index([institutionId])
   @@map("canteens")
@@ -156,6 +163,7 @@ model MenuItem {
   totalOrders     Int      @default(0) @map("total_orders")
   avgRating       Decimal  @default(0) @db.Decimal(2, 1) @map("avg_rating")
   totalRatings    Int      @default(0) @map("total_ratings")
+  ratingSum       Int      @default(0) @map("rating_sum")
   customizations  Json?    @default("[]")
   createdAt       DateTime @default(now()) @map("created_at")
   updatedAt       DateTime @updatedAt @map("updated_at")
@@ -259,6 +267,8 @@ model Order {
   bankTransactionId   String?        @map("bank_transaction_id")
   pointsEarned        Int            @default(0) @map("points_earned")
   pointsRedeemed      Int            @default(0) @map("points_redeemed")
+  feedbackNudgeAt     DateTime?      @map("feedback_nudge_at")
+  feedbackNudgeSentAt DateTime?      @map("feedback_nudge_sent_at")
   createdAt           DateTime       @default(now()) @map("created_at")
   updatedAt           DateTime       @updatedAt @map("updated_at")
 
@@ -266,7 +276,8 @@ model Order {
   canteen           Canteen            @relation(fields: [canteenId], references: [id])
   slot              PickupSlot?        @relation(fields: [slotId], references: [id])
   items             OrderItem[]
-  rating            Rating?
+  ratings           Rating[]
+  feedbacks         Feedback[]
   walletTransaction WalletTransaction?
   pointTransactions PointTransaction[]
 
@@ -369,6 +380,7 @@ model PointTransaction {
   id           String               @id @default(uuid())
   loyaltyId    String               @map("loyalty_id")
   orderId      String?              @map("order_id")
+  feedbackId   String?              @unique @map("feedback_id") // one award per review
   type         PointTransactionType
   points       Int
   description  String
@@ -412,19 +424,211 @@ model DailySettlement {
 
 model Rating {
   id         String   @id @default(uuid())
-  userId     String   @map("user_id")
-  orderId    String   @unique @map("order_id")
+  userId     String?  @map("user_id") // nulled when the account is deleted; the numbers stay
+  orderId    String   @map("order_id")
   menuItemId String   @map("menu_item_id")
+  canteenId  String?  @map("canteen_id") // denormalised for aggregates
+  feedbackId String?  @map("feedback_id")
   rating     Int      // 1-5
+  taste      Int?     // 1-5
+  portion    Int?     // 1-5
+  value      Int?     // 1-5
+  tags       String[] @default([])
   review     String?
   createdAt  DateTime @default(now()) @map("created_at")
 
-  user     User     @relation(fields: [userId], references: [id])
-  order    Order    @relation(fields: [orderId], references: [id])
-  menuItem MenuItem @relation(fields: [menuItemId], references: [id])
+  user     User?     @relation(fields: [userId], references: [id])
+  order    Order     @relation(fields: [orderId], references: [id])
+  menuItem MenuItem  @relation(fields: [menuItemId], references: [id])
+  canteen  Canteen?  @relation(fields: [canteenId], references: [id])
+  feedback Feedback? @relation(fields: [feedbackId], references: [id])
 
   @@unique([userId, orderId, menuItemId])
+  @@index([menuItemId])
+  @@index([canteenId, createdAt])
+  @@index([feedbackId])
   @@map("ratings")
+}
+
+// ============================================================
+// FEEDBACK ("Khana Talk")
+// ============================================================
+
+enum FeedbackKind {
+  ORDER_REVIEW
+  CANTEEN
+  APP_BUG
+  APP_IDEA
+  APP_PRAISE
+  APP_OTHER
+}
+
+enum FeedbackStatus {
+  RECEIVED
+  SEEN
+  IN_PROGRESS
+  RESOLVED
+  WONT_FIX
+  DUPLICATE
+}
+
+enum FeedbackPriority {
+  LOW
+  NORMAL
+  HIGH
+  URGENT
+}
+
+enum FeedbackVisibility {
+  ADMIN_ONLY
+  VENDOR
+  PUBLIC
+}
+
+enum FeedbackModeration {
+  PENDING
+  CLEAN
+  FLAGGED
+  HIDDEN
+}
+
+enum AttachmentStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+// A partial unique index lives only in the migration SQL (Prisma cannot express it):
+//   feedback_order_review_once ON feedback(order_id) WHERE kind = 'ORDER_REVIEW' AND deleted_at IS NULL
+model Feedback {
+  id                   String             @id @default(uuid())
+  kind                 FeedbackKind
+  status               FeedbackStatus     @default(RECEIVED)
+  priority             FeedbackPriority   @default(NORMAL)
+  visibility           FeedbackVisibility @default(ADMIN_ONLY)
+  moderation           FeedbackModeration @default(PENDING)
+  userId               String?            @map("user_id") // null once the account is deleted
+  institutionId        String?            @map("institution_id")
+  orderId              String?            @map("order_id")
+  canteenId            String?            @map("canteen_id")
+  overallRating        Int?               @map("overall_rating") // 1-5
+  tags                 String[]           @default([])
+  body                 String?            // raw text, admin only
+  bodyRedacted         String?            @map("body_redacted") // PII-redacted text for vendor and public views
+  isAnonymous          Boolean            @default(false) @map("is_anonymous")
+  shareNameWithCanteen Boolean            @default(false) @map("share_name_with_canteen")
+  contextJson          Json?              @map("context_json") // diagnostics, 8 KB max
+  clientRequestId      String?            @map("client_request_id")
+  assignedTo           String?            @map("assigned_to")
+  duplicateOfId        String?            @map("duplicate_of_id")
+  changelogEntryId     String?            @map("changelog_entry_id")
+  editCount            Int                @default(0) @map("edit_count")
+  firstSeenAt          DateTime?          @map("first_seen_at")
+  slaDueAt             DateTime?          @map("sla_due_at")
+  resolvedAt           DateTime?          @map("resolved_at")
+  editedAt             DateTime?          @map("edited_at")
+  deletedAt            DateTime?          @map("deleted_at")
+  createdAt            DateTime           @default(now()) @map("created_at")
+  updatedAt            DateTime           @updatedAt @map("updated_at")
+
+  user           User?                    @relation(fields: [userId], references: [id])
+  institution    Institution?             @relation(fields: [institutionId], references: [id])
+  order          Order?                   @relation(fields: [orderId], references: [id])
+  canteen        Canteen?                 @relation(fields: [canteenId], references: [id])
+  changelogEntry ChangelogEntry?          @relation(fields: [changelogEntryId], references: [id])
+  ratings        Rating[]
+  attachments    FeedbackAttachment[]
+  events         FeedbackEvent[]
+  reports        FeedbackReport[]
+  reveals        FeedbackIdentityReveal[]
+
+  @@unique([userId, clientRequestId])
+  @@index([institutionId, status, createdAt])
+  @@index([canteenId, createdAt])
+  @@index([userId, createdAt])
+  @@index([orderId])
+  @@index([kind, createdAt])
+  @@map("feedback")
+}
+
+model FeedbackAttachment {
+  id         String           @id @default(uuid())
+  feedbackId String           @map("feedback_id")
+  url        String
+  publicId   String?          @map("public_id")
+  mimeType   String?          @map("mime_type")
+  sizeBytes  Int?             @map("size_bytes")
+  status     AttachmentStatus @default(PENDING)
+  createdAt  DateTime         @default(now()) @map("created_at")
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@index([feedbackId])
+  @@map("feedback_attachments")
+}
+
+// Audit trail and timeline. Internal events are never shown to the user or vendor.
+model FeedbackEvent {
+  id         String          @id @default(uuid())
+  feedbackId String          @map("feedback_id")
+  actorId    String?         @map("actor_id")
+  type       String          // "created", "status_changed", "note", "reply", ...
+  fromStatus FeedbackStatus? @map("from_status")
+  toStatus   FeedbackStatus? @map("to_status")
+  note       String?
+  isInternal Boolean         @default(false) @map("is_internal")
+  data       Json?
+  createdAt  DateTime        @default(now()) @map("created_at")
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@index([feedbackId, createdAt])
+  @@map("feedback_events")
+}
+
+// Reports of feedback or replies as inappropriate (UGC policy).
+model FeedbackReport {
+  id         String    @id @default(uuid())
+  feedbackId String    @map("feedback_id")
+  reporterId String    @map("reporter_id")
+  reason     String
+  resolvedAt DateTime? @map("resolved_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id], onDelete: Cascade)
+
+  @@unique([feedbackId, reporterId])
+  @@map("feedback_reports")
+}
+
+// "You said, we did"
+model ChangelogEntry {
+  id            String    @id @default(uuid())
+  institutionId String?   @map("institution_id") // null = platform-wide
+  title         String
+  body          String
+  createdBy     String?   @map("created_by")
+  publishedAt   DateTime? @map("published_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+
+  feedbacks Feedback[]
+
+  @@index([publishedAt])
+  @@map("changelog_entries")
+}
+
+// Audit of super-admin reveals of an anonymous sender.
+model FeedbackIdentityReveal {
+  id         String   @id @default(uuid())
+  feedbackId String   @map("feedback_id")
+  revealedBy String   @map("revealed_by")
+  reason     String
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  feedback Feedback @relation(fields: [feedbackId], references: [id])
+
+  @@index([feedbackId])
+  @@map("feedback_identity_reveals")
 }
 
 model Favorite {
