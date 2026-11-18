@@ -19,6 +19,15 @@ export async function deleteAccount(req: AuthRequest, res: Response) {
       await tx.favorite.deleteMany({ where: { userId } });
       await tx.rating.deleteMany({ where: { userId } });
 
+      // AI assistant data: conversations (messages and proposals cascade or are
+      // removed here), usage rows and reports. The ledger keeps no content, only
+      // counts, so it stays with the user link removed.
+      await tx.assistantProposal.deleteMany({ where: { userId } });
+      await tx.assistantReport.deleteMany({ where: { userId } });
+      await tx.assistantConversation.deleteMany({ where: { userId } });
+      await tx.assistantDailyUsage.deleteMany({ where: { scope: userId } });
+      await tx.assistantCallLog.updateMany({ where: { userId }, data: { userId: null } });
+
       const loyaltyAccount = await tx.loyaltyAccount.findUnique({ where: { userId } });
       if (loyaltyAccount) {
         await tx.pointTransaction.deleteMany({ where: { loyaltyId: loyaltyAccount.id } });
