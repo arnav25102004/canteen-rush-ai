@@ -36,10 +36,16 @@ async function findInstitutionByEmail(email: string) {
  * as STUDENT except emails listed in ADMIN_EMAILS (comma-separated). Vendors
  * are promoted by an admin from the admin Users page.
  */
-export function initialRoleFor(email: string): UserRole {
-  const admins = (process.env.ADMIN_EMAILS || '')
+function emailList(name: string): string[] {
+  return (process.env[name] || '')
     .split(',').map((e) => e.trim().toLowerCase()).filter(Boolean);
-  return admins.includes(email.toLowerCase()) ? UserRole.ADMIN : UserRole.STUDENT;
+}
+
+export function initialRoleFor(email: string): UserRole {
+  const lower = email.toLowerCase();
+  if (emailList('ADMIN_EMAILS').includes(lower)) return UserRole.ADMIN;
+  if (emailList('VENDOR_EMAILS').includes(lower)) return UserRole.VENDOR;
+  return UserRole.STUDENT;
 }
 
 // ─── Dev-mode login (local only: NODE_ENV!=production AND DEV_AUTH=true) ──────
@@ -137,10 +143,10 @@ export async function register(req: Request, res: Response) {
   const role = initialRoleFor(email);
 
   let institution = await findInstitutionByEmail(email);
-  // Allowlisted admins (ADMIN_EMAILS, set by the operator) may use a non-institution
-  // email; they attach to the oldest active institution. Everyone else still needs
-  // an institution email.
-  const adminFallback = !institution && role === UserRole.ADMIN;
+  // Allowlisted admins/vendors (ADMIN_EMAILS / VENDOR_EMAILS, set by the operator) may
+  // use a non-institution email; they attach to the oldest active institution.
+  // Everyone else still needs an institution email.
+  const adminFallback = !institution && (role === UserRole.ADMIN || role === UserRole.VENDOR);
   if (adminFallback) {
     institution = await prisma.institution.findFirst({
       where: { isActive: true },
