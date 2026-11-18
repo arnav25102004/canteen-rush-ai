@@ -3,11 +3,12 @@
   "version": "1.0.0",
   "main": "expo-router/entry",
   "scripts": {
-    "start": "expo start --port 8085",
+    "start": "node ../../scripts/adb-reverse.js && expo start --port 8085",
     "tunnel": "expo start --tunnel --port 8085 -c",
-    "android": "expo run:android",
+    "android": "node ../../scripts/adb-reverse.js && expo run:android",
     "ios": "expo run:ios",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "adb:reverse": "node ../../scripts/adb-reverse.js"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.2",

@@ -8,6 +8,7 @@
     "dev:mobile": "(npm run dev --prefix packages/server) & (npm start --prefix apps/mobile)",
     "server": "npm run dev --prefix packages/server",
     "web": "npm run dev --prefix apps/web",
-    "mobile": "npm start --prefix apps/mobile"
+    "mobile": "npm start --prefix apps/mobile",
+    "adb:reverse": "node scripts/adb-reverse.js"
   }
 }
