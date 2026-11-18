@@ -1,14 +1,18 @@
-import { Prisma, OrderStatus, UserRole, FeedbackKind, FeedbackModeration, FeedbackVisibility } from '@prisma/client';
+import { Prisma, OrderStatus, UserRole, FeedbackKind, FeedbackModeration, FeedbackPriority, FeedbackVisibility } from '@prisma/client';
 import { prisma } from '../config/database';
 import { AppError } from '../utils/errors';
 import { CreateOrderReviewInput, UpdateFeedbackInput } from '../utils/feedbackSchemas';
 import { moderateText } from './feedbackModeration.service';
 import { applyCanteenDelta, applyItemDelta } from './feedbackAggregates.service';
+import { slaDueAt } from '../utils/feedbackSla';
 
 export const REVIEW_WINDOW_MS = 7 * 24 * 3600 * 1000;
 export const EDIT_WINDOW_MS = 24 * 3600 * 1000;
 export const MAX_EDITS = 3;
 export const MAX_FEEDBACK_PER_30_DAYS = 50;
+
+/** Events the author may see; internal notes are filtered out in the query as well as in studentView. */
+const PUBLIC_EVENTS = { where: { isInternal: false }, orderBy: { createdAt: 'asc' as const } };
 
 const REVIEWER_ROLES: UserRole[] = [UserRole.STUDENT, UserRole.FACULTY];
 
@@ -34,6 +38,12 @@ export function studentView(fb: any, ratings?: any[]) {
     items: (ratings ?? fb.ratings ?? []).map((r: any) => ({
       menuItemId: r.menuItemId, rating: r.rating, taste: r.taste, portion: r.portion, value: r.value, tags: r.tags,
     })),
+    // Only what the author may read: status changes and public replies. No actor, no notes, no reasons.
+    timeline: (fb.events ?? [])
+      .filter((e: any) => !e.isInternal && (e.type === 'status_changed' || e.type === 'reply'))
+      .map((e: any) => ({
+        type: e.type, toStatus: e.toStatus ?? null, reply: e.type === 'reply' ? e.note : null, createdAt: e.createdAt,
+      })),
   };
 }
 
@@ -185,6 +195,7 @@ export async function createOrderReview(
           isAnonymous: input.isAnonymous ?? false,
           shareNameWithCanteen: input.shareNameWithCanteen ?? false,
           clientRequestId: input.clientRequestId,
+          slaDueAt: slaDueAt(FeedbackPriority.NORMAL, now),
           ...moderationFields(input.body),
         },
       });
@@ -305,7 +316,7 @@ export async function listMine(userId: string, page: number, limit: number) {
   const where = { userId, deletedAt: null };
   const [rows, total] = await Promise.all([
     prisma.feedback.findMany({
-      where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit, include: { ratings: true },
+      where, orderBy: { createdAt: 'desc' }, skip: (page - 1) * limit, take: limit, include: { ratings: true, events: PUBLIC_EVENTS },
     }),
     prisma.feedback.count({ where }),
   ]);
@@ -313,7 +324,7 @@ export async function listMine(userId: string, page: number, limit: number) {
 }
 
 export async function getMine(userId: string, id: string) {
-  const fb = await prisma.feedback.findFirst({ where: { id, userId, deletedAt: null }, include: { ratings: true } });
+  const fb = await prisma.feedback.findFirst({ where: { id, userId, deletedAt: null }, include: { ratings: true, events: PUBLIC_EVENTS } });
   if (!fb) throw new AppError(404, 'Feedback not found');
   return studentView(fb);
 }

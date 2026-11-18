@@ -60,3 +60,31 @@ export async function sendOrderNotification(
     });
   }
 }
+
+export interface UserNotification {
+  title: string;
+  body: string;
+  type: string;
+  data?: Record<string, string | number | boolean | null>;
+}
+
+/**
+ * Tell one user something. The in-app Notification row is always written (and its failure is
+ * thrown, since that is the record of truth). The push is best effort: a missing token, FCM
+ * being off or an FCM error never breaks the caller.
+ */
+export async function notifyUser(userId: string, n: UserNotification) {
+  await prisma.notification.create({
+    data: { userId, title: n.title, body: n.body, type: n.type, data: n.data ?? {} },
+  });
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { fcmToken: true } });
+    if (user?.fcmToken) {
+      const strData: Record<string, string> = {};
+      for (const [k, v] of Object.entries(n.data ?? {})) strData[k] = String(v);
+      await sendPushNotification(user.fcmToken, n.title, n.body, { type: n.type, ...strData });
+    }
+  } catch {
+    // push is optional
+  }
+}

@@ -2,6 +2,7 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import api from '../../lib/api';
 
 const vendorLinks = [
   { href: '/vendor/dashboard', label: 'Dashboard', icon: '📊' },
@@ -15,6 +16,7 @@ const adminLinks = [
   { href: '/admin/dashboard', label: 'Dashboard', icon: '📊' },
   { href: '/admin/canteens', label: 'Canteens', icon: '🏪' },
   { href: '/admin/vendors', label: 'Vendors', icon: '👤' },
+  { href: '/admin/feedback', label: 'Feedback', icon: '💬' },
   { href: '/admin/users', label: 'Users', icon: '👥' },
   { href: '/admin/settlements', label: 'Settlements', icon: '💰' },
   { href: '/admin/analytics', label: 'Analytics', icon: '📈' },
@@ -25,10 +27,23 @@ export default function Sidebar() {
   const pathname = usePathname();
   const router = useRouter();
   const [role, setRole] = useState<string>('VENDOR');
+  const [unread, setUnread] = useState(0);
 
   useEffect(() => {
     setRole(localStorage.getItem('user_role') || 'VENDOR');
   }, []);
+
+  // Unread = feedback still in RECEIVED. Best effort: the badge just stays hidden on failure.
+  useEffect(() => {
+    if (role !== 'ADMIN') return;
+    let alive = true;
+    const poll = () => api.get('/admin/feedback/stats')
+      .then((r) => { if (alive) setUnread(r.data?.byStatus?.RECEIVED ?? 0); })
+      .catch(() => {});
+    poll();
+    const t = setInterval(poll, 60000);
+    return () => { alive = false; clearInterval(t); };
+  }, [role]);
 
   const links = role === 'ADMIN' ? adminLinks : vendorLinks;
 
@@ -56,6 +71,11 @@ export default function Sidebar() {
           >
             <span>{link.icon}</span>
             {link.label}
+            {link.href === '/admin/feedback' && unread > 0 && (
+              <span className="ml-auto bg-white text-[#e94560] text-xs font-bold rounded-full px-2 py-0.5" aria-label={`${unread} unread`}>
+                {unread > 99 ? '99+' : unread}
+              </span>
+            )}
           </Link>
         ))}
       </nav>
