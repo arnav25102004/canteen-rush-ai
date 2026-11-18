@@ -1,9 +1,9 @@
 import { prisma } from '../config/database';
 import { cacheGet, cacheSet, slotCacheKeys } from '../config/redis';
-import { generateTimeSlots } from '../utils/helpers';
+import { generateTimeSlots, slotStartsAt, SLOT_CUTOFF_MS } from '../utils/helpers';
 import { UserRole } from '@prisma/client';
 
-interface SlotAvailability {
+export interface SlotAvailability {
   slotId: string;
   startTime: string;
   endTime: string;
@@ -84,4 +84,33 @@ export async function generateDefaultSlots(canteenId: string, date: Date) {
   const breakfastSlots = generateTimeSlots(7, 45, 10, 30, 15, 25);
   const lunchSlots = generateTimeSlots(12, 0, 14, 30, 15, 30);
   return generateSlotsForCanteen(canteenId, date, [...breakfastSlots, ...lunchSlots]);
+}
+
+export type SlotWithCutoff = SlotAvailability & { isCutoffPassed: boolean };
+
+/**
+ * All pickup slots of a canteen on a calendar day (IST, "YYYY-MM-DD"), with availability for
+ * the caller's role and whether ordering for each has closed.
+ */
+export async function listSlotsWithAvailability(
+  canteenId: string,
+  day: string,
+  userRole?: UserRole,
+  now: number = Date.now(),
+): Promise<{ slots: SlotWithCutoff[]; date: string }> {
+  const targetDate = new Date(`${day}T00:00:00.000Z`);
+  const slots = await prisma.pickupSlot.findMany({
+    where: { canteenId, date: targetDate },
+    orderBy: { startTime: 'asc' },
+  });
+
+  // Fetch all availabilities in parallel, passing user role for faculty priority
+  const availabilities = await Promise.all(slots.map((s) => getSlotAvailability(s.id, userRole)));
+
+  const enriched = slots.map((slot, i) => ({
+    ...availabilities[i],
+    isCutoffPassed: slotStartsAt(slot.date, slot.startTime).getTime() - now < SLOT_CUTOFF_MS,
+  })) as SlotWithCutoff[];
+
+  return { slots: enriched, date: targetDate.toISOString().split('T')[0] };
 }

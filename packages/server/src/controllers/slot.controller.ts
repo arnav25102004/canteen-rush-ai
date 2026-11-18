@@ -2,8 +2,8 @@ import { Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest, canteenScope } from '../middleware/auth';
 import { cacheDel, slotCacheKeys } from '../config/redis';
-import { getSlotAvailability, generateSlotsForCanteen } from '../services/slot.service';
-import { istDateKey, slotStartsAt, SLOT_CUTOFF_MS, validateBody } from '../utils/helpers';
+import { getSlotAvailability, generateSlotsForCanteen, listSlotsWithAvailability } from '../services/slot.service';
+import { istDateKey, istDayString, slotStartsAt, SLOT_CUTOFF_MS, validateBody } from '../utils/helpers';
 import { z } from 'zod';
 
 const MAX_SLOT_RANGE_DAYS = 31;
@@ -27,29 +27,11 @@ const updateSlotSchema = z.object({
 export async function listSlotsForCanteen(req: AuthRequest, res: Response) {
   const { id: canteenId } = req.params;
   const { date } = req.query;
-  const userRole = req.user?.role;
 
   // Calendar date (YYYY-MM-DD, IST); defaults to today in IST
-  const day = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date)
-    ? date
-    : istDateKey().replace(/(\d{4})(\d{2})(\d{2})/, '$1-$2-$3');
-  const targetDate = new Date(`${day}T00:00:00.000Z`);
+  const day = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : istDayString();
 
-  const slots = await prisma.pickupSlot.findMany({
-    where: { canteenId, date: targetDate },
-    orderBy: { startTime: 'asc' },
-  });
-
-  // Fetch all availabilities in parallel, passing user role for faculty priority
-  const availabilities = await Promise.all(slots.map((s) => getSlotAvailability(s.id, userRole)));
-
-  const now = Date.now();
-  const enriched = slots.map((slot, i) => ({
-    ...availabilities[i],
-    isCutoffPassed: slotStartsAt(slot.date, slot.startTime).getTime() - now < SLOT_CUTOFF_MS,
-  }));
-
-  return res.json({ slots: enriched, date: targetDate.toISOString().split('T')[0] });
+  return res.json(await listSlotsWithAvailability(canteenId, day, req.user?.role));
 }
 
 export async function generateSlots(req: AuthRequest, res: Response) {
