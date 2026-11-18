@@ -23,6 +23,10 @@ export function registerSessionExpiredHandler(fn: () => void | Promise<void>) {
 }
 
 api.interceptors.request.use(async (config) => {
+  // On a cold start Firebase restores the saved login asynchronously. Without
+  // waiting, early requests go out with no token, get a 401, and the handler
+  // below signs the user out even though their session is fine.
+  await auth.authStateReady();
   const firebaseUser = auth.currentUser;
   if (firebaseUser) {
     // Cached token; Firebase refreshes it automatically when near expiry.
