@@ -24,6 +24,22 @@ const razorpayKeys = ['RAZORPAY_KEY_ID', 'RAZORPAY_KEY_SECRET', 'RAZORPAY_WEBHOO
  */
 export function validateEnv(env: NodeJS.ProcessEnv = process.env): string[] {
   const problems: string[] = [];
+  // Assistant settings: format checks only. A missing GROQ_API_KEY is never a boot error.
+  for (const k of ['ASSISTANT_USER_DAILY_TOKENS', 'ASSISTANT_GLOBAL_DAILY_TOKENS'] as const) {
+    const v = env[k]?.trim();
+    if (v && !/^[1-9]\d*$/.test(v)) problems.push(`${k} (must be a positive integer)`);
+  }
+  const assistantUrl = env.ASSISTANT_BASE_URL?.trim();
+  if (assistantUrl && !/^https?:\/\//.test(assistantUrl)) problems.push('ASSISTANT_BASE_URL (must start with http:// or https://)');
+  const assistantLimits = env.ASSISTANT_MODEL_LIMITS?.trim();
+  if (assistantLimits) {
+    try {
+      const parsed = JSON.parse(assistantLimits);
+      if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) problems.push('ASSISTANT_MODEL_LIMITS (must be a JSON object)');
+    } catch {
+      problems.push('ASSISTANT_MODEL_LIMITS (invalid JSON)');
+    }
+  }
   const base = baseSchema.safeParse(env);
   if (!base.success) {
     for (const issue of base.error.issues) problems.push(`${issue.path.join('.')} (${issue.code === 'too_small' ? 'too short' : 'missing/invalid'})`);

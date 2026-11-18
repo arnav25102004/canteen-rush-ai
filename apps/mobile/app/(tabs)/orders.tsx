@@ -1,7 +1,9 @@
 import { useEffect, useState, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, RefreshControl, StyleSheet } from 'react-native';
-import { useRouter } from 'expo-router';
+import { useRouter, useFocusEffect } from 'expo-router';
 import api from '../../services/api';
+import { getReviewedOrderIds } from '../../services/feedback';
+import { ReviewChip } from '../../components/feedback/ReviewEntry';
 
 const STATUS_COLOR: Record<string, string> = {
   CONFIRMED: '#f59e0b', ACCEPTED: '#3b82f6', PREPARING: '#f97316', READY: '#10b981', PICKED_UP: '#9ca3af', CANCELLED: '#ef4444', NO_SHOW: '#9ca3af',
@@ -16,13 +18,16 @@ export default function OrdersScreen() {
   const router = useRouter();
   const [orders, setOrders] = useState<any[]>([]);
   const [refreshing, setRefreshing] = useState(false);
+  const [reviewed, setReviewed] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const { data } = await api.get('/orders');
     setOrders(data.orders || []);
+    // Best effort: without it the chip just shows "Rate" and the server answers if already reviewed.
+    getReviewedOrderIds().then(setReviewed).catch(() => {});
   }, []);
 
-  useEffect(() => { load(); }, [load]);
+  useFocusEffect(useCallback(() => { load(); }, [load]));
 
   const onRefresh = async () => { setRefreshing(true); await load(); setRefreshing(false); };
 
@@ -41,6 +46,11 @@ export default function OrdersScreen() {
               </View>
             </View>
             <Text style={styles.canteenName}>{o.canteen?.name}</Text>
+            {o.status === 'PICKED_UP' && (
+              <View style={{ flexDirection: 'row', marginBottom: 6 }}>
+                <ReviewChip orderId={o.id} orderNumber={o.orderNumber} pickedUpAt={o.pickedUpAt} reviewed={!!reviewed[o.id]} />
+              </View>
+            )}
             <Text style={styles.items} numberOfLines={1}>{o.items?.map((i: any) => `${i.menuItem.name} ×${i.quantity}`).join(', ')}</Text>
             <View style={{ flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 }}>
               <Text style={styles.meta}>{new Date(o.createdAt).toLocaleDateString()}</Text>

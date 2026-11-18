@@ -2,6 +2,7 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest, canteenScope } from '../middleware/auth';
 import { uploadImage, cloudinaryConfigured } from '../config/cloudinary';
+import { getCanteenMenuData, searchMenuByText } from '../services/menu.service';
 import { z } from 'zod';
 import fs from 'fs';
 
@@ -35,30 +36,7 @@ const menuItemSchema = z.object({
 export async function getCanteenMenu(req: Request, res: Response) {
   const { id: canteenId } = req.params;
   const { diet } = req.query; // "veg", "jain", "noegg"
-
-  const categories = await prisma.menuCategory.findMany({
-    where: { canteenId, isActive: true },
-    orderBy: { sortOrder: 'asc' },
-    include: {
-      items: {
-        where: {
-          isAvailable: true,
-          ...(diet === 'veg' ? { isVeg: true } : {}),
-          ...(diet === 'jain' ? { isJain: true } : {}),
-          ...(diet === 'noegg' ? { containsEgg: false } : {}),
-        },
-        orderBy: [{ sortOrder: 'asc' }, { totalOrders: 'desc' }],
-      },
-    },
-  });
-
-  const popular = await prisma.menuItem.findMany({
-    where: { canteenId, isAvailable: true, isPopular: true },
-    orderBy: { totalOrders: 'desc' },
-    take: 5,
-  });
-
-  return res.json({ categories, popular });
+  return res.json(await getCanteenMenuData(canteenId, typeof diet === 'string' ? diet : null));
 }
 
 export async function searchMenuInCanteen(req: Request, res: Response) {
@@ -81,25 +59,26 @@ export async function searchMenuInCanteen(req: Request, res: Response) {
   return res.json({ items });
 }
 
-export async function searchMenuGlobal(req: Request, res: Response) {
+/**
+ * Global search, limited to available items of active canteens in the caller's institution.
+ * The institution comes from the logged-in user's DB row, or from ?institutionId= when anonymous.
+ */
+export async function searchMenuGlobal(req: AuthRequest, res: Response) {
   const { q } = req.query;
   if (typeof q !== 'string' || !q || q.length > 100) return res.status(400).json({ error: 'Query param q required (max 100 chars)' });
 
-  const items = await prisma.menuItem.findMany({
-    take: 50,
-    where: {
-      isAvailable: true,
-      OR: [
-        { name: { contains: q as string, mode: 'insensitive' } },
-        { description: { contains: q as string, mode: 'insensitive' } },
-      ],
-    },
-    include: {
-      canteen: { select: { id: true, name: true, campus: true } },
-      category: { select: { name: true } },
-    },
-    orderBy: { totalOrders: 'desc' },
-  });
+  let institutionId: string | null | undefined;
+  if (req.user) {
+    const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { institutionId: true } });
+    institutionId = me?.institutionId;
+  } else if (typeof req.query.institutionId === 'string') {
+    institutionId = req.query.institutionId;
+  }
+  if (!institutionId) {
+    return res.status(400).json({ error: 'Institution unknown: sign in with an institution or pass ?institutionId=' });
+  }
+
+  const items = await searchMenuByText(institutionId, q);
   return res.json({ items });
 }
 
