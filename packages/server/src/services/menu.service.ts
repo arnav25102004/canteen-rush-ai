@@ -52,6 +52,17 @@ export async function getCanteenMenuData(canteenId: string, diet?: string | null
   return { categories, popular };
 }
 
+/** The rules every student-facing item list shares: institution, active canteen and category, available, diet. */
+export function visibleItemWhere(o: { institutionId: string; canteenId?: string; diet?: string | null }): Prisma.MenuItemWhereInput {
+  return {
+    isAvailable: true,
+    canteen: { institutionId: o.institutionId, isActive: true },
+    category: { isActive: true },
+    ...(o.canteenId ? { canteenId: o.canteenId } : {}),
+    ...dietWhere(o.diet),
+  };
+}
+
 /**
  * Plain-text menu search for the global search box: available items of ACTIVE canteens
  * of one institution whose name or description contains the text.
@@ -116,11 +127,7 @@ export async function searchMenuItems(q: MenuSearch): Promise<MenuItemSummary[]>
     .slice(0, 6);
 
   const where: Prisma.MenuItemWhereInput = {
-    isAvailable: true,
-    canteen: { institutionId: q.institutionId, isActive: true },
-    category: { isActive: true },
-    ...(q.canteenId ? { canteenId: q.canteenId } : {}),
-    ...dietWhere(q.diet),
+    ...visibleItemWhere({ institutionId: q.institutionId, canteenId: q.canteenId, diet: q.diet }),
     ...(q.maxPrice != null ? { price: { lte: q.maxPrice } } : {}),
     ...(q.maxPrepMinutes != null ? { prepTimeMinutes: { lte: q.maxPrepMinutes } } : {}),
     ...(tokens.length
