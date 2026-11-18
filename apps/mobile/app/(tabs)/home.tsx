@@ -1,16 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { View, Text, FlatList, TouchableOpacity, TextInput, StyleSheet, ActivityIndicator, Alert, AppState } from 'react-native';
 import { useFocusEffect, useRouter } from 'expo-router';
 import api from '../../services/api';
 import { getCapabilities } from '../../services/assistant';
 import { useCartStore } from '../../store/cartStore';
 import { useAuthStore } from '../../store/authStore';
+import { getChangelog, ChangelogEntry } from '../../services/feedback';
+import { t } from '../../components/feedback/copy';
 
 interface Canteen {
   id: string; name: string; campus: string; location: string;
   imageUrl?: string; isActive: boolean; openingTime: string; closingTime: string;
   avgPrepTime: number; _count: { orders: number };
+  /** 7-day average rating; null until the canteen has 10+ ratings. */
+  mood?: number | null; moodCount?: number;
 }
+
+const DISMISS_KEY = (id: string) => `changelog_dismissed_${id}`;
 
 interface LastOrder {
   id: string;
@@ -26,6 +33,8 @@ export default function HomeScreen() {
   const [search, setSearch] = useState('');
   const [lastOrder, setLastOrder] = useState<LastOrder | null>(null);
   const [loading, setLoading] = useState(true);
+  const [topRated, setTopRated] = useState(false);
+  const [changelog, setChangelog] = useState<ChangelogEntry | null>(null);
   const [assistantOn, setAssistantOn] = useState(false);
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -45,6 +54,15 @@ export default function HomeScreen() {
       api.get('/orders/last-order').then(r => setLastOrder(r.data.order)).catch(() => null),
     ]);
 
+    // Latest changelog entry, unless it was dismissed (stored per entry id).
+    getChangelog(1, 1).then(async ({ entries }) => {
+      const latest = entries[0];
+      if (!latest) return;
+      let dismissed: string | null = null;
+      try { dismissed = await AsyncStorage.getItem(DISMISS_KEY(latest.id)); } catch { /* show it */ }
+      if (!dismissed) setChangelog(latest);
+    }).catch(() => null);
+
     pollRef.current = setInterval(fetchCanteens, 15000);
 
     const appStateSub = AppState.addEventListener('change', state => {
@@ -58,9 +76,18 @@ export default function HomeScreen() {
   }, [institution?.id]);
 
   useEffect(() => {
-    if (!search) { setFiltered(canteens); return; }
-    setFiltered(canteens.filter(c => c.name.toLowerCase().includes(search.toLowerCase())));
-  }, [search, canteens]);
+    let list = search ? canteens.filter(c => c.name.toLowerCase().includes(search.toLowerCase())) : canteens;
+    // Top rated: only canteens with enough ratings to have a mood, best first.
+    if (topRated) list = list.filter(c => c.mood != null).sort((a, b) => (b.mood ?? 0) - (a.mood ?? 0));
+    setFiltered(list);
+  }, [search, canteens, topRated]);
+
+  async function dismissChangelog() {
+    if (!changelog) return;
+    const id = changelog.id;
+    setChangelog(null);
+    try { await AsyncStorage.setItem(DISMISS_KEY(id), '1'); } catch { /* shows again next time */ }
+  }
 
   // The button shows only when the server says the assistant is enabled (hidden on 404 or any error).
   useFocusEffect(useCallback(() => {
@@ -111,12 +138,38 @@ export default function HomeScreen() {
       )}
       <TextInput style={styles.search} placeholder="Search canteens..." value={search}
         onChangeText={setSearch} placeholderTextColor="#999" />
+      <View style={styles.chipRow}>
+        <TouchableOpacity
+          onPress={() => setTopRated(v => !v)}
+          style={[styles.chip, topRated && styles.chipOn]}
+          accessibilityRole="button"
+          accessibilityState={{ selected: topRated }}
+          accessibilityLabel={t('topRated')}>
+          <Text style={[styles.chipText, topRated && styles.chipTextOn]}>⭐ {t('topRated')}</Text>
+        </TouchableOpacity>
+      </View>
 
       <FlatList
         data={filtered}
         keyExtractor={c => c.id}
         contentContainerStyle={{ padding: 16 }}
-        ListHeaderComponent={lastOrder ? (
+        ListHeaderComponent={<>
+          {changelog && (
+            <View style={styles.changelogCard} accessible accessibilityLabel={`${t('changelogTitle')}. ${changelog.title}. ${changelog.body}`}>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.changelogKicker}>{t('changelogTitle')}</Text>
+                <Text style={styles.changelogTitle}>{changelog.title}</Text>
+                <Text style={styles.changelogBody} numberOfLines={3}>{changelog.body}</Text>
+                <TouchableOpacity onPress={() => router.push('/feedback/changelog')} accessibilityRole="button">
+                  <Text style={styles.changelogMore}>See all →</Text>
+                </TouchableOpacity>
+              </View>
+              <TouchableOpacity onPress={dismissChangelog} accessibilityRole="button" accessibilityLabel={t('changelogDismiss')} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
+                <Text style={styles.changelogX}>✕</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+          {lastOrder ? (
           <View style={styles.reorderCard}>
             <View style={styles.reorderHeader}>
               <Text style={styles.reorderTitle}>Your Usual</Text>
@@ -129,7 +182,8 @@ export default function HomeScreen() {
               <Text style={styles.reorderBtnText}>Reorder →</Text>
             </TouchableOpacity>
           </View>
-        ) : undefined}
+        ) : null}
+        </>}
         renderItem={({ item: c }) => (
           <TouchableOpacity style={styles.card} onPress={() => router.push(`/canteen/${c.id}`)}>
             <View style={styles.cardHeader}>
@@ -144,6 +198,11 @@ export default function HomeScreen() {
                 </Text>
               </View>
             </View>
+            {c.mood != null && (
+              <View style={styles.moodPill} accessible accessibilityLabel={t('moodLabel', 'en', { mood: c.mood.toFixed(1), n: c.moodCount ?? 0 })}>
+                <Text style={styles.moodText}>{c.mood.toFixed(1)} 😋 ({c.moodCount ?? 0})</Text>
+              </View>
+            )}
             {c._count.orders > 0 && (
               <Text style={styles.queueText}>👥 {c._count.orders} active orders</Text>
             )}
@@ -175,6 +234,19 @@ const styles = StyleSheet.create({
   canteenName: { fontSize: 18, fontWeight: '700', color: '#1a1a2e', marginBottom: 4 },
   canteenMeta: { fontSize: 12, color: '#666', marginBottom: 2 },
   badge: { paddingHorizontal: 8, paddingVertical: 4, borderRadius: 20 },
+  moodPill: { alignSelf: 'flex-start', backgroundColor: '#fef3c7', borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3, marginTop: 8 },
+  moodText: { fontSize: 12, fontWeight: '700', color: '#92400e' },
+  chipRow: { flexDirection: 'row', paddingHorizontal: 16, marginTop: -6, marginBottom: 4 },
+  chip: { paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1, borderColor: '#d1d5db', backgroundColor: '#fff' },
+  chipOn: { backgroundColor: '#e94560', borderColor: '#e94560' },
+  chipText: { fontSize: 12, fontWeight: '600', color: '#374151' },
+  chipTextOn: { color: '#fff' },
+  changelogCard: { flexDirection: 'row', backgroundColor: '#ecfdf5', borderRadius: 16, padding: 14, marginBottom: 12, borderWidth: 1, borderColor: '#a7f3d0' },
+  changelogKicker: { fontSize: 11, fontWeight: '700', color: '#047857', textTransform: 'uppercase', letterSpacing: 0.5 },
+  changelogTitle: { fontSize: 15, fontWeight: '700', color: '#1a1a2e', marginTop: 2 },
+  changelogBody: { fontSize: 13, color: '#374151', marginTop: 2 },
+  changelogMore: { fontSize: 12, fontWeight: '700', color: '#047857', marginTop: 6 },
+  changelogX: { fontSize: 16, color: '#6b7280' },
   queueText: { fontSize: 12, color: '#f59e0b', marginTop: 8 },
   reorderCard: { backgroundColor: '#1a1a2e', borderRadius: 16, padding: 16, marginBottom: 16 },
   reorderHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 },

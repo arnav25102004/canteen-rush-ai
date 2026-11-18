@@ -109,6 +109,10 @@ export default function ProfileScreen() {
           <Text style={styles.rowValue}>{t('profileMyFeedback')}</Text>
           <Text style={styles.favOrder}>→</Text>
         </TouchableOpacity>
+        <TouchableOpacity style={styles.row} onPress={() => router.push('/feedback/changelog')} accessibilityRole="button">
+          <Text style={styles.rowValue}>{t('profileChangelog')}</Text>
+          <Text style={styles.favOrder}>→</Text>
+        </TouchableOpacity>
       </View>
 
       <TouchableOpacity style={styles.logoutBtn} onPress={logout}>

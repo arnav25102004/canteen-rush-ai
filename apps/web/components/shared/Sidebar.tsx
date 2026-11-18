@@ -19,6 +19,7 @@ const adminLinks = [
   { href: '/admin/vendors', label: 'Vendors', icon: '👤' },
   { href: '/admin/feedback', label: 'Feedback', icon: '💬' },
   { href: '/admin/feedback/dashboard', label: 'Feedback insights', icon: '📉' },
+  { href: '/admin/changelog', label: 'You said, we did', icon: '✅' },
   { href: '/admin/users', label: 'Users', icon: '👥' },
   { href: '/admin/settlements', label: 'Settlements', icon: '💰' },
   { href: '/admin/analytics', label: 'Analytics', icon: '📈' },

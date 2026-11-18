@@ -27,6 +27,7 @@ import paymentRoutes from './routes/payment.routes';
 import notificationRoutes from './routes/notification.routes';
 import adminRoutes from './routes/admin.routes';
 import feedbackAdminRoutes from './routes/feedback.admin.routes';
+import changelogAdminRoutes from './routes/changelog.admin.routes';
 import feedbackVendorRoutes from './routes/feedback.vendor.routes';
 import analyticsRoutes from './routes/analytics.routes';
 import institutionRoutes from './routes/institution.routes';
@@ -149,6 +150,7 @@ app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
 // Before '/api/admin': that router rejects SUPER_ADMIN for everything it serves.
 app.use('/api/admin/feedback', feedbackAdminRoutes);
+app.use('/api/admin/changelog', changelogAdminRoutes);
 // Before '/api/vendor' (menu routes): the anonymised vendor feedback view is VENDOR-only.
 app.use('/api/vendor/feedback', feedbackVendorRoutes);
 app.use('/api/admin', adminRoutes);

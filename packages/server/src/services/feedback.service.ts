@@ -5,6 +5,8 @@ import { CreateAppFeedbackInput, CreateOrderReviewInput, UpdateFeedbackInput } f
 import { moderateText } from './feedbackModeration.service';
 import { applyCanteenDelta, applyItemDelta } from './feedbackAggregates.service';
 import { slaDueAt } from '../utils/feedbackSla';
+import { awardPointsForFeedback } from './loyalty.service';
+import { logger } from '../utils/logger';
 
 export const REVIEW_WINDOW_MS = 7 * 24 * 3600 * 1000;
 export const EDIT_WINDOW_MS = 24 * 3600 * 1000;
@@ -146,6 +148,20 @@ function moderationFields(body: string | null | undefined) {
   };
 }
 
+/**
+ * Points for a new review, after its transaction committed. Errors are logged and swallowed: a points
+ * problem must never fail the review. Returns the points awarded (0 if none) so the app can say so.
+ */
+async function awardAfterCreate(userId: string, feedbackId: string, orderId: string, now: Date): Promise<number> {
+  try {
+    const res = await awardPointsForFeedback(prisma, { userId, feedbackId, orderId }, now);
+    return res.awarded ? res.points : 0;
+  } catch (err) {
+    logger.warn('Feedback points award failed', { feedbackId, err: (err as Error)?.message });
+    return 0;
+  }
+}
+
 export async function createOrderReview(
   userId: string,
   input: CreateOrderReviewInput,
@@ -166,7 +182,7 @@ export async function createOrderReview(
   assertItemsBelong(input, order);
 
   try {
-    return await prisma.$transaction(async (tx) => {
+    const out = await prisma.$transaction(async (tx) => {
       // Serialise one user's writes so the 30-day cap and duplicate checks cannot race.
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${userId}))`;
 
@@ -223,6 +239,9 @@ export async function createOrderReview(
       const ratings = await tx.rating.findMany({ where: { feedbackId: fb.id } });
       return { feedback: studentView(fb, ratings), created: true };
     });
+    if (!out.created) return out;
+    const pointsAwarded = await awardAfterCreate(userId, out.feedback.id, order.id, now);
+    return { feedback: { ...out.feedback, pointsAwarded }, created: true };
   } catch (err) {
     // A concurrent identical request can win the unique index between our check and insert.
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {

@@ -5,6 +5,7 @@ import { logger } from '../utils/logger';
 import { cleanText, FEEDBACK_TAGS, graphemeLength } from '../utils/feedbackSchemas';
 import { slaDueAt } from '../utils/feedbackSla';
 import { notifyUser } from './notification.service';
+import { awardHelpfulBonus, FEEDBACK_HELPFUL_POINTS } from './loyalty.service';
 
 /** What feedbackScope(req) returns for an admin. Spread last into every where so a filter can never widen it. */
 export type AdminScope = { institutionId?: string; canteenId?: string };
@@ -235,6 +236,8 @@ export interface UpdateInput {
   assignedTo?: string | null;
   reason?: string;
   duplicateOfId?: string | null;
+  /** Mark helpful: one extra 10 points to the author, once ever. */
+  helpful?: boolean;
 }
 
 export async function updateFeedback(scope: AdminScope, id: string, actorId: string, input: UpdateInput, now = new Date()) {
@@ -293,9 +296,9 @@ export async function updateFeedback(scope: AdminScope, id: string, actorId: str
       feedbackId: id, actorId, type: 'assigned', isInternal: true, data: { from: fb.assignedTo, to: input.assignedTo },
     });
   }
-  if (!events.length) throw new AppError(400, 'Nothing to change');
+  if (!events.length && !input.helpful) throw new AppError(400, 'Nothing to change');
 
-  await prisma.$transaction(async (tx) => {
+  if (events.length) await prisma.$transaction(async (tx) => {
     // Conditional on the status we read: a concurrent change makes this match nothing.
     const res = await tx.feedback.updateMany({
       where: { id, ...scope, deletedAt: null, status: fb.status },
@@ -308,7 +311,28 @@ export async function updateFeedback(scope: AdminScope, id: string, actorId: str
   });
 
   if (input.status) await notifyStatus(fb, input.status);
-  return getFeedbackDetail(scope, id, actorId, now);
+
+  let helpfulAwarded = false;
+  if (input.helpful) {
+    try {
+      const res = await awardHelpfulBonus(prisma, id, now);
+      helpfulAwarded = res.awarded;
+      if (res.awarded) {
+        await prisma.feedbackEvent.create({
+          data: { feedbackId: id, actorId, type: 'marked_helpful', isInternal: true, data: { points: FEEDBACK_HELPFUL_POINTS } },
+        });
+        await tryNotify(fb.userId, {
+          title: 'Your feedback was helpful',
+          body: `The team marked your feedback helpful. +${FEEDBACK_HELPFUL_POINTS} points.`,
+          type: 'feedback_update', data: { feedbackId: fb.id, helpful: true },
+        });
+      }
+    } catch (err) {
+      logger.warn('Helpful bonus failed', { feedbackId: id, err: (err as Error)?.message });
+    }
+  }
+  const detail = await getFeedbackDetail(scope, id, actorId, now);
+  return input.helpful ? { ...detail, helpfulAwarded } : detail;
 }
 
 export async function addNote(scope: AdminScope, id: string, actorId: string, text: string) {

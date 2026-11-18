@@ -150,6 +150,7 @@ export default function RootLayout() {
         <Stack.Screen name="feedback/order/[orderId]" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="feedback/app" options={{ presentation: 'fullScreenModal' }} />
         <Stack.Screen name="feedback/mine" />
+        <Stack.Screen name="feedback/changelog" />
       </Stack>
     </View>
   );
