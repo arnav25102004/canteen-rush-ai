@@ -269,6 +269,7 @@ model Order {
   pointsRedeemed      Int            @default(0) @map("points_redeemed")
   feedbackNudgeAt     DateTime?      @map("feedback_nudge_at")
   feedbackNudgeSentAt DateTime?      @map("feedback_nudge_sent_at")
+  feedbackNudge2SentAt DateTime?     @map("feedback_nudge2_sent_at")
   createdAt           DateTime       @default(now()) @map("created_at")
   updatedAt           DateTime       @updatedAt @map("updated_at")
 
@@ -288,6 +289,7 @@ model Order {
   @@index([qrCode])
   @@index([canteenId, createdAt])
   @@index([paymentStatus, createdAt])
+  @@index([feedbackNudgeSentAt, feedbackNudgeAt])
   @@map("orders")
 }
 
