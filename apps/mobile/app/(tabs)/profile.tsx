@@ -3,6 +3,7 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Alert, ActivityIn
 import { useRouter } from 'expo-router';
 import { useAuthStore } from '../../store/authStore';
 import api from '../../services/api';
+import { t } from '../../components/feedback/copy';
 
 interface FavoriteItem { id: string; name: string; price: number; isVeg: boolean; canteen: { id: string; name: string } }
 
@@ -98,6 +99,17 @@ export default function ProfileScreen() {
             </View>
           ))
       }
+
+      <View style={styles.section}>
+        <TouchableOpacity style={styles.row} onPress={() => router.push('/feedback/app')} accessibilityRole="button">
+          <Text style={styles.rowValue}>{t('profileSendFeedback')}</Text>
+          <Text style={styles.favOrder}>→</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.row} onPress={() => router.push('/feedback/mine')} accessibilityRole="button">
+          <Text style={styles.rowValue}>{t('profileMyFeedback')}</Text>
+          <Text style={styles.favOrder}>→</Text>
+        </TouchableOpacity>
+      </View>
 
       <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
         <Text style={styles.logoutText}>Sign Out</Text>

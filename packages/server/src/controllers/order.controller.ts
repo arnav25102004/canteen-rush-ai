@@ -1,11 +1,12 @@
 import { Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
-import { placeOrder, cancelOrder } from '../services/order.service';
+import { placeOrder, cancelOrder, assertNotStrikeBanned, findRecentOrdersForUser } from '../services/order.service';
 import { awardPointsForOrder } from '../services/loyalty.service';
 import { verifyQRToken, generateQRCodeDataURL } from '../services/qr.service';
 import { sendOrderNotification } from '../services/notification.service';
 import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '../utils/helpers';
+import { computeNudgeAt } from '../utils/feedbackNudge';
 import { z } from 'zod';
 import { OrderStatus, UserRole } from '@prisma/client';
 
@@ -35,15 +36,7 @@ export async function createOrder(req: AuthRequest, res: Response) {
   const v = validateBody(placeOrderSchema, req.body, res);
   if (!v.success) return;
 
-  // Check if student is strike-banned
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.id },
-    select: { orderStrikes: true, strikeBannedUntil: true },
-  });
-  if (user?.strikeBannedUntil && user.strikeBannedUntil > new Date()) {
-    const until = user.strikeBannedUntil.toLocaleDateString('en-IN', { timeZone: 'Asia/Kolkata' });
-    return res.status(403).json({ error: `You've been temporarily blocked from ordering after repeated no-shows until ${until}.` });
-  }
+  await assertNotStrikeBanned(req.user!.id);
 
   const result = await placeOrder({ userId: req.user!.id, userRole: req.user!.role, ...v.data }, req.io);
   return res.status(201).json({
@@ -57,14 +50,7 @@ export async function createOrder(req: AuthRequest, res: Response) {
 }
 
 export async function getLastOrder(req: AuthRequest, res: Response) {
-  const order = await prisma.order.findFirst({
-    where: { userId: req.user!.id, status: { notIn: [OrderStatus.CANCELLED] } },
-    orderBy: { createdAt: 'desc' },
-    include: {
-      canteen: { select: { id: true, name: true, imageUrl: true, isActive: true } },
-      items: { include: { menuItem: { select: { id: true, name: true, imageUrl: true, price: true, isAvailable: true, isVeg: true } } } },
-    },
-  });
+  const [order = null] = await findRecentOrdersForUser(req.user!.id, 1);
   return res.json({ order });
 }
 
@@ -226,12 +212,14 @@ export async function scanQR(req: AuthRequest, res: Response) {
 
   // Atomic hand-over: a QR can only be redeemed once even if scanned twice at once.
   // Cash orders are paid at this moment, at the counter.
+  const pickedUpAt = new Date();
   const { count } = await prisma.order.updateMany({
     where: { id, status: OrderStatus.READY, qrScanned: false },
     data: {
       status: OrderStatus.PICKED_UP,
       qrScanned: true,
-      pickedUpAt: new Date(),
+      pickedUpAt,
+      feedbackNudgeAt: computeNudgeAt(pickedUpAt),
       ...(order.paymentMethod === 'CASH' ? { paymentStatus: 'PAID' as const, paymentVerifiedAt: new Date() } : {}),
     },
   });

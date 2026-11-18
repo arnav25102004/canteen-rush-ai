@@ -5,6 +5,7 @@ import QRCode from 'react-native-qrcode-svg';
 import { usePreventScreenCapture } from 'expo-screen-capture';
 import api from '../../services/api';
 import { getSocket } from '../../services/socket';
+import { ReviewEntryCard } from '../../components/feedback/ReviewEntry';
 
 const TERMINAL = ['PICKED_UP', 'CANCELLED', 'NO_SHOW'];
 const STEPS = ['CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY', 'PICKED_UP'];
@@ -168,6 +169,10 @@ export default function OrderTrackingScreen() {
           )}
           <Text style={styles.qrHint}>Your food is ready — head to the counter!</Text>
         </View>
+      )}
+
+      {order.status === 'PICKED_UP' && (
+        <ReviewEntryCard orderId={order.id} status={order.status} pickedUpAt={order.pickedUpAt} />
       )}
 
       {/* Order Items */}

@@ -10,6 +10,7 @@ const vendorLinks = [
   { href: '/vendor/menu', label: 'Menu', icon: '🍽️' },
   { href: '/vendor/scanner', label: 'QR Scanner', icon: '📷' },
   { href: '/vendor/analytics', label: 'Analytics', icon: '📈' },
+  { href: '/vendor/feedback', label: 'Feedback', icon: '💬' },
 ];
 
 const adminLinks = [

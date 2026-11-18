@@ -3,10 +3,11 @@ import { z } from 'zod';
 import { AuthRequest } from '../middleware/auth';
 import { AppError } from '../utils/errors';
 import { logger } from '../utils/logger';
-import { createOrderReviewSchema, updateFeedbackSchema } from '../utils/feedbackSchemas';
+import { runFeedbackAlerts } from '../services/feedbackAlerts.service';
+import { createAppFeedbackSchema, createOrderReviewSchema, updateFeedbackSchema } from '../utils/feedbackSchemas';
 import { reportFeedback } from '../services/feedbackModerationAdmin.service';
 import {
-  createOrderReview, deleteOrderReview, getEligibility, getMine, listMine, updateOrderReview,
+  createAppFeedback, createOrderReview, deleteOrderReview, getEligibility, getMine, listMine, updateOrderReview,
 } from '../services/feedback.service';
 
 const idSchema = z.string().uuid();
@@ -29,7 +30,20 @@ export async function eligibility(req: AuthRequest, res: Response) {
 export async function createOrder(req: AuthRequest, res: Response) {
   const input = createOrderReviewSchema.parse(req.body);
   const { feedback, created } = await createOrderReview(req.user!.id, input);
-  if (created) logger.info('Order review created', { feedbackId: feedback.id });
+  if (created) {
+    logger.info('Order review created', { feedbackId: feedback.id });
+    void runFeedbackAlerts(feedback.id); // after the commit; never blocks or throws
+  }
+  return res.status(created ? 201 : 200).json({ feedback });
+}
+
+export async function createApp(req: AuthRequest, res: Response) {
+  const input = createAppFeedbackSchema.parse(req.body);
+  const { feedback, created } = await createAppFeedback(req.user!.id, input);
+  if (created) {
+    logger.info('App feedback created', { feedbackId: feedback.id });
+    void runFeedbackAlerts(feedback.id);
+  }
   return res.status(created ? 201 : 200).json({ feedback });
 }
 

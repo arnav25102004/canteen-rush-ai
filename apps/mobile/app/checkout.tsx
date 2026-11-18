@@ -5,6 +5,7 @@ import { isAxiosError } from 'axios';
 import RazorpayCheckout from 'react-native-razorpay';
 import api from '../services/api';
 import { useCartStore } from '../store/cartStore';
+import SlotPicker from '../components/SlotPicker';
 
 const REDEMPTION_TIERS = [
   { points: 200, discount: 20 },
@@ -14,7 +15,8 @@ const REDEMPTION_TIERS = [
 
 export default function CheckoutScreen() {
   const router = useRouter();
-  const { canteenId, canteenName, items, total, clear } = useCartStore();
+  const { canteenId, canteenName, items, total, clear, slot, setSlot } = useCartStore();
+  const [slotRefresh, setSlotRefresh] = useState(0);
   const [specialInstructions, setSpecialInstructions] = useState('');
   const [placing, setPlacing] = useState(false);
   const [loyaltyPoints, setLoyaltyPoints] = useState(0);
@@ -42,6 +44,7 @@ export default function CheckoutScreen() {
       const { data } = await api.post('/orders', {
         canteenId,
         items: items.map(i => ({ menuItemId: i.menuItemId, quantity: i.quantity })),
+        slotId: slot?.id,
         specialInstructions: specialInstructions.trim() || undefined,
         pointsToRedeem: selectedPointsTier || 0,
       });
@@ -81,6 +84,11 @@ export default function CheckoutScreen() {
       if (isAxiosError<{ error?: string }>(error)) {
         // Server-provided message (e.g. strike ban, closed canteen); generic fallback for network/5xx.
         const msg = error.response?.status && error.response.status < 500 ? error.response.data?.error : undefined;
+        // The chosen pickup time may have filled up or closed: clear it and reload the list.
+        if (slot && error.response?.status === 400 && /slot|pickup|cutoff|full|closed/i.test(msg || '')) {
+          setSlot(null);
+          setSlotRefresh((n) => n + 1);
+        }
         Alert.alert('Could not place order', msg || 'Something went wrong. Please try again.');
         return;
       }
@@ -155,6 +163,9 @@ export default function CheckoutScreen() {
           </View>
         </View>
       )}
+
+      {/* Pickup time */}
+      {canteenId && <SlotPicker canteenId={canteenId} value={slot} onChange={setSlot} refreshKey={slotRefresh} />}
 
       {/* Special Instructions */}
       <View style={styles.card}>

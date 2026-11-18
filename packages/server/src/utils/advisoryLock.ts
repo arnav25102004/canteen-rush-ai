@@ -4,6 +4,10 @@ import { prisma } from '../config/database';
 export const LOCK_KEYS = {
   autoCancel: 7301001,
   slotGeneration: 7301002,
+  assistantRetention: 7301003,
+  feedbackNudge: 7301004,
+  feedbackSla: 7301005,
+  feedbackRetention: 7301006,
 } as const;
 
 /**
