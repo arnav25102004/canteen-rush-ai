@@ -1,6 +1,10 @@
 import { Response } from 'express';
 import { Router } from '../utils/router';
-import { authenticate, AuthRequest } from '../middleware/auth';
+import { authenticate, AuthRequest, requireCustomer } from '../middleware/auth';
+import { userLimiter } from '../middleware/rateLimit';
+import { prisma } from '../config/database';
+import { AppError } from '../utils/errors';
+import { handOffProposal, ProposalError } from '../assistant/proposals';
 import { assistantDisabledReason, isPilotAllowed, loadAssistantConfig } from '../assistant/config';
 import { getUsageToday, MAX_TURNS_PER_USER } from '../assistant/budget';
 import { governor } from '../assistant/provider/modelGovernor';
@@ -30,5 +34,27 @@ router.get('/capabilities', authenticate, async (req: AuthRequest, res: Response
   if (usage.globalTokens >= cfg.globalDailyTokens) return res.json({ enabled: true, available: false, reason: 'busy', turnsLeftToday });
   return res.json({ enabled: true, available: true, turnsLeftToday });
 });
+
+/**
+ * Turns an order card into cart contents. Works even when the assistant is switched off, so a
+ * card shown earlier still opens. Nothing is ordered here; the student pays at normal checkout.
+ */
+router.post(
+  '/proposals/:id/checkout',
+  authenticate,
+  requireCustomer,
+  userLimiter('assistant-handoff', 60_000, 20),
+  async (req: AuthRequest, res: Response) => {
+    const user = await prisma.user.findUnique({ where: { id: req.user!.id }, select: { institutionId: true } });
+    if (!user?.institutionId) throw new AppError(400, 'Your account has no campus set');
+    try {
+      const result = await handOffProposal(req.user!.id, req.user!.role, String(req.params.id), user.institutionId);
+      return res.json(result);
+    } catch (err) {
+      if (err instanceof ProposalError) return res.status(err.status).json({ error: err.message, code: err.code });
+      throw err;
+    }
+  },
+);
 
 export default router;
