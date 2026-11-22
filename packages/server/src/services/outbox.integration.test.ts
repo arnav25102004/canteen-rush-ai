@@ -51,6 +51,30 @@ describe.skipIf(!url)('order retries (Postgres)', async () => {
     expect(await prisma.order.count({ where: { userId, idempotencyKey: clientRequestId } })).toBe(1);
   });
 
+  it('concurrent orders cannot overbook a slot, and a repeated request places one order', async () => {
+    await prisma.canteen.update({ where: { id: canteenId }, data: { razorpayAccountId: null } });
+    const slot = await prisma.pickupSlot.create({
+      data: {
+        canteenId, date: new Date(Date.now() + 2 * 86400_000), startTime: '12:00', endTime: '12:15',
+        maxOrders: 5, walkInReserved: 0, facultyReserved: 0,
+      },
+    });
+    const place = (clientRequestId: string) => placeOrder({
+      userId, userRole: 'STUDENT', canteenId, slotId: slot.id, items: [{ menuItemId: itemId, quantity: 1 }], clientRequestId,
+    });
+
+    const results = await Promise.allSettled(Array.from({ length: 20 }, () => place(randomUUID())));
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(5);
+    expect((await prisma.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } })).currentOrders).toBe(5);
+    expect(await prisma.order.count({ where: { slotId: slot.id } })).toBe(5);
+
+    await prisma.pickupSlot.update({ where: { id: slot.id }, data: { maxOrders: 10 } });
+    const key = randomUUID();
+    const repeated = await Promise.all(Array.from({ length: 5 }, () => place(key)));
+    expect(new Set(repeated.map((r) => r.order.id)).size).toBe(1);
+    expect((await prisma.pickupSlot.findUniqueOrThrow({ where: { id: slot.id } })).currentOrders).toBe(6);
+  });
+
   it('awarding points twice for one pickup pays once', async () => {
     const order = await prisma.order.create({
       data: {

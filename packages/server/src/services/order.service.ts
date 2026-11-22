@@ -3,7 +3,7 @@ import Razorpay from 'razorpay';
 import { randomUUID } from 'crypto';
 import { prisma } from '../config/database';
 import { generateQRToken } from './qr.service';
-import { enqueue, enqueueMany } from './outbox.service';
+import { enqueue, enqueueMany, OutboxEvent } from './outbox.service';
 import { invalidateSlots } from './catalogCache.service';
 import { withTimeout } from '../middleware/resilience';
 import { validatePointsRedemption, redeemPoints, refundRedeemedPoints } from './loyalty.service';
@@ -331,16 +331,69 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   // QR token the vendor scans at pickup
   const qrToken = generateQRToken({ orderId, userId, orderNumber, canteenId });
 
+  // Razorpay orders get their code from the webhook once payment is captured.
+  const pickupCode = paymentMethod === 'RAZORPAY' ? null : generatePickupCode();
+  const events: OutboxEvent[] = [
+    { type: 'menu.totalOrders', payload: { items: items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })) } },
+    // Razorpay orders announce themselves from the webhook once payment is captured
+    ...(paymentMethod !== 'RAZORPAY'
+      ? [{ type: 'notification.order' as const, payload: { userId, orderId, orderNumber, status: OrderStatus.CONFIRMED } }]
+      : []),
+  ];
+  // Built from what was just written, so the response needs no item or slot queries.
+  const withDetails = <T extends object>(row: T) => ({
+    ...row,
+    items: orderItems.map((item, i) => ({ ...item, menuItem: { name: quote.lines[i].name } })),
+    slot: quote.slot ? { startTime: quote.slot.startTime, endTime: quote.slot.endTime } : null,
+  });
+
   let order;
   try {
+    if (walletDeduction === 0 && pointsToRedeem === 0) {
+      // No wallet or points to move: the slot claim and every insert commit as one statement,
+      // so the contended slot row is locked for a single database round trip.
+      const [{ placed }] = await prisma.$queryRaw<Array<{ placed: number }>>(Prisma.sql`
+        WITH slot_claim AS (
+          UPDATE pickup_slots SET current_orders = current_orders + 1
+          WHERE id = ${slotId ?? null}::text AND is_open AND current_orders < ${slotCap}::int
+          RETURNING id
+        ), new_order AS (
+          INSERT INTO orders (
+            id, idempotency_key, qr_code, pickup_code, order_number, user_id, canteen_id, slot_id, status,
+            payment_method, payment_status, subtotal, platform_fee, discount_amount, total_amount,
+            upi_order_note, special_instructions, points_redeemed, updated_at
+          )
+          SELECT
+            ${orderId}::text, ${clientRequestId ?? null}::text, ${qrToken}::text, ${pickupCode}::text, ${orderNumber}::text,
+            ${userId}::text, ${canteenId}::text, ${slotId ?? null}::text, ${status}::"OrderStatus",
+            ${paymentMethod}::"PaymentMethod", ${paymentStatus}::"PaymentStatus", ${subtotal}::numeric, 0, 0, ${totalAmount}::numeric,
+            ${orderNumber}::text, ${specialInstructions ?? null}::text, 0, now()
+          WHERE ${slotId ? Prisma.sql`EXISTS (SELECT 1 FROM slot_claim)` : Prisma.sql`TRUE`}
+          RETURNING id
+        ), new_items AS (
+          INSERT INTO order_items (id, order_id, menu_item_id, quantity, unit_price, total_price, customizations, notes)
+          SELECT x.id, o.id, x."menuItemId", x.quantity, x."unitPrice", x."totalPrice", COALESCE(x.customizations, '{}'::jsonb), x.notes
+          FROM new_order o
+          CROSS JOIN jsonb_to_recordset(${JSON.stringify(orderItems)}::jsonb) AS x(
+            id text, "menuItemId" text, quantity int, "unitPrice" numeric, "totalPrice" numeric, customizations jsonb, notes text
+          )
+        ), new_events AS (
+          INSERT INTO outbox_events (type, payload)
+          SELECT e.type, e.payload
+          FROM new_order
+          CROSS JOIN jsonb_to_recordset(${JSON.stringify(events)}::jsonb) AS e(type text, payload jsonb)
+        )
+        SELECT count(*)::int AS placed FROM new_order`);
+      if (placed === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
+      order = withDetails(await prisma.order.findUniqueOrThrow({ where: { id: orderId } }));
+    } else {
     order = await prisma.$transaction(async (tx) => {
     const newOrder = await tx.order.create({
       data: {
         id: orderId,
         idempotencyKey: clientRequestId,
         qrCode: qrToken,
-        // Razorpay orders get their code from the webhook once payment is captured.
-        pickupCode: paymentMethod === 'RAZORPAY' ? undefined : generatePickupCode(),
+        pickupCode,
         orderNumber,
         userId,
         canteenId,
@@ -382,13 +435,7 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
       await redeemPoints(tx, userId, newOrder.id, pointsToRedeem, pointsDiscount);
     }
 
-    await enqueueMany(tx, [
-      { type: 'menu.totalOrders', payload: { items: items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })) } },
-      // Razorpay orders announce themselves from the webhook once payment is captured
-      ...(paymentMethod !== 'RAZORPAY'
-        ? [{ type: 'notification.order' as const, payload: { userId, orderId, orderNumber, status: OrderStatus.CONFIRMED } }]
-        : []),
-    ]);
+    await enqueueMany(tx, events);
 
     // Last, so the contended slot row is locked for the shortest time possible.
     // Conditional updates: a concurrent order can't overbook the slot or overspend the wallet.
@@ -400,17 +447,16 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
       if (count === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
     }
 
-    // Built from what was just written, so the response needs no extra queries.
-    return {
-      ...newOrder,
-      items: orderItems.map((item, i) => ({ ...item, menuItem: { name: quote.lines[i].name } })),
-      slot: quote.slot ? { startTime: quote.slot.startTime, endTime: quote.slot.endTime } : null,
-    };
+    return withDetails(newOrder);
     });
+    }
   } catch (err) {
     // Two copies of the same request raced: the loser returns the winner's order.
-    if (clientRequestId && err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002'
-      && String(err.meta?.target).includes('idempotency_key')) {
+    const duplicate = err instanceof Prisma.PrismaClientKnownRequestError && (
+      (err.code === 'P2002' && String(err.meta?.target).includes('idempotency_key'))
+      || (err.code === 'P2010' && err.message.includes('(user_id, idempotency_key)'))
+    );
+    if (clientRequestId && duplicate) {
       const winner = await findPlacedOrder(userId, clientRequestId);
       if (winner) return winner;
     }

@@ -92,7 +92,7 @@ export async function getCanteenLiveStats(req: Request, res: Response) {
       },
     };
   }, { ttl: 5, stale: 15, cacheIf: (s) => s.exists });
-  return sendCachedJson(req, res, stats.body);
+  return sendCachedJson(req, res, stats.body, 'public, max-age=0, s-maxage=2, stale-while-revalidate=5');
 }
 
 export async function createCanteen(req: AuthRequest, res: Response) {
