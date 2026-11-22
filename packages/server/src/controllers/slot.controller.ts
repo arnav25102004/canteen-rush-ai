@@ -1,5 +1,7 @@
 import { Response } from 'express';
 import { prisma } from '../config/database';
+import { cached, sendCachedJson } from '../config/cache';
+import { UserRole } from '@prisma/client';
 import { AuthRequest, canteenScope } from '../middleware/auth';
 import { invalidateSlots } from '../services/catalogCache.service';
 import { generateSlotsForCanteen, listSlotsWithAvailability } from '../services/slot.service';
@@ -31,7 +33,14 @@ export async function listSlotsForCanteen(req: AuthRequest, res: Response) {
   // Calendar date (YYYY-MM-DD, IST); defaults to today in IST
   const day = typeof date === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(date) ? date : istDayString();
 
-  return res.json(await listSlotsWithAvailability(canteenId, day, req.user?.role));
+  // Faculty and admins see the faculty-reserved seats. Display only: orders re-check capacity in the DB.
+  const role = req.user?.role === UserRole.FACULTY || req.user?.role === UserRole.ADMIN ? UserRole.FACULTY : UserRole.STUDENT;
+  const body = await cached(
+    `slots-view:${canteenId}:${day}:${role}`,
+    () => listSlotsWithAvailability(canteenId, day, role),
+    { ttl: 1, stale: 0, cacheIf: (v) => v.slots.length > 0 },
+  );
+  return sendCachedJson(req, res, body, 'private, no-store');
 }
 
 export async function generateSlots(req: AuthRequest, res: Response) {

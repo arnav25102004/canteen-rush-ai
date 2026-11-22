@@ -87,22 +87,22 @@ export async function getCanteenRevenue(period: 'today' | 'week' | 'month' = 'we
 }
 
 export async function getAdminOverview() {
-  const [totalOrders, totalRevenue, canteens] = await Promise.all([
+  const since = new Date(Date.now() - 86400000);
+  const [totalOrders, totalRevenue, canteens, recent] = await Promise.all([
     prisma.order.count({ where: { status: { not: OrderStatus.CANCELLED } } }),
     prisma.order.aggregate({ where: { paymentStatus: 'PAID' }, _sum: { totalAmount: true } }),
     prisma.canteen.findMany({
       where: { isActive: true },
-      select: {
-        id: true, name: true, campus: true, isActive: true,
-        _count: { select: { orders: { where: { createdAt: { gte: new Date(Date.now() - 86400000) } } } } },
-      },
+      select: { id: true, name: true, campus: true, isActive: true },
     }),
+    prisma.order.groupBy({ by: ['canteenId'], where: { createdAt: { gte: since } }, _count: { _all: true } }),
   ]);
+  const recentBy = new Map(recent.map((r) => [r.canteenId, r._count._all]));
 
   return {
     totalOrders,
     totalRevenue: Number(totalRevenue._sum.totalAmount ?? 0),
     activeCanteens: canteens.length,
-    canteens,
+    canteens: canteens.map((c) => ({ ...c, _count: { orders: recentBy.get(c.id) ?? 0 } })),
   };
 }

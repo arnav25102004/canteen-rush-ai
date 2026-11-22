@@ -7,7 +7,7 @@ import { enqueue } from '../services/outbox.service';
 import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '../utils/helpers';
 import { computeNudgeAt } from '../utils/feedbackNudge';
 import { z } from 'zod';
-import { OrderStatus, UserRole } from '@prisma/client';
+import { OrderStatus, Prisma, UserRole } from '@prisma/client';
 
 const placeOrderSchema = z.object({
   canteenId: z.string().uuid(),
@@ -31,11 +31,6 @@ const VALID_TRANSITIONS: Partial<Record<OrderStatus, OrderStatus[]>> = {
   [OrderStatus.PREPARING]: [OrderStatus.READY],
   [OrderStatus.READY]: [],
 };
-
-// Everything the kitchen board still has to act on, whichever day it was placed.
-const KITCHEN_STATUSES: OrderStatus[] = [
-  OrderStatus.PENDING, OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING, OrderStatus.READY,
-];
 
 export async function createOrder(req: AuthRequest, res: Response) {
   const v = validateBody(placeOrderSchema, req.body, res);
@@ -154,26 +149,38 @@ export async function getVendorOrders(req: AuthRequest, res: Response) {
 
   const { date, slotId, status, active } = req.query as Record<string, string>;
   const { skip, take } = parsePagination(req.query.page as string, req.query.limit as string || '50');
+  const include = {
+    user: { select: { name: true, phone: true } },
+    slot: { select: { startTime: true, endTime: true } },
+    items: { include: { menuItem: { select: { name: true } } } },
+  };
+  const orderBy = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
+
+  if (active === 'true') {
+    // Everything the kitchen still has to act on, whichever day it was placed. The statuses
+    // are SQL literals because Postgres cannot match bound parameters to the partial index.
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM orders
+      WHERE canteen_id = ${canteenId}
+        AND status IN ('PENDING', 'CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY')
+        ${slotId ? Prisma.sql`AND slot_id = ${slotId}` : Prisma.empty}
+      ORDER BY created_at, id
+      LIMIT ${take} OFFSET ${skip}`);
+    const orders = await prisma.order.findMany({ where: { id: { in: rows.map((r) => r.id) } }, orderBy, include });
+    return res.json({ orders });
+  }
 
   const orders = await prisma.order.findMany({
     where: {
       canteenId,
+      createdAt: buildDateRange(date),
       ...(slotId ? { slotId } : {}),
-      ...(active === 'true'
-        ? { status: { in: KITCHEN_STATUSES } }
-        : {
-            createdAt: buildDateRange(date),
-            ...(status ? { status: status as OrderStatus } : { status: { notIn: [OrderStatus.CANCELLED] } }),
-          }),
+      ...(status ? { status: status as OrderStatus } : { status: { notIn: [OrderStatus.CANCELLED] } }),
     },
-    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+    orderBy,
     skip,
     take,
-    include: {
-      user: { select: { name: true, phone: true } },
-      slot: { select: { startTime: true, endTime: true } },
-      items: { include: { menuItem: { select: { name: true } } } },
-    },
+    include,
   });
 
   return res.json({ orders });
@@ -316,30 +323,27 @@ export async function getPrepSheet(req: AuthRequest, res: Response) {
   if (!canteenId) return res.status(403).json({ error: 'No canteen assigned' });
 
   const { date, slotId } = req.query as Record<string, string>;
-  const createdAt = buildDateRange(date);
+  const { gte, lte } = buildDateRange(date);
 
-  const orderItems = await prisma.orderItem.findMany({
-    where: {
-      order: {
-        canteenId,
-        // Unpaid and uncollected orders are not food the kitchen has to make.
-        status: { notIn: [OrderStatus.PENDING, OrderStatus.CANCELLED, OrderStatus.NO_SHOW, OrderStatus.PICKED_UP] },
-        ...(slotId ? { slotId } : { createdAt }),
-      },
-    },
-    include: {
-      menuItem: { select: { name: true } },
-      order: { include: { slot: { select: { startTime: true, endTime: true } } } },
-    },
-  });
+  // One aggregate over open orders only. Unpaid and uncollected orders are not food to make.
+  const rows = await prisma.$queryRaw<Array<{ menuItemId: string; name: string; startTime: string | null; endTime: string | null; quantity: number }>>(Prisma.sql`
+    SELECT oi.menu_item_id AS "menuItemId", mi.name, ps.start_time AS "startTime", ps.end_time AS "endTime",
+           SUM(oi.quantity)::int AS quantity
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.id
+    JOIN menu_items mi ON mi.id = oi.menu_item_id
+    LEFT JOIN pickup_slots ps ON ps.id = o.slot_id
+    WHERE o.canteen_id = ${canteenId}
+      AND o.status IN ('CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY')
+      AND ${slotId ? Prisma.sql`o.slot_id = ${slotId}` : Prisma.sql`o.created_at >= ${gte} AND o.created_at <= ${lte}`}
+    GROUP BY 1, 2, 3, 4`);
 
   const aggregated: Record<string, { name: string; quantity: number; slots: Record<string, number> }> = {};
-  for (const oi of orderItems) {
-    const key = oi.menuItemId;
-    const slotLabel = oi.order.slot ? `${oi.order.slot.startTime}-${oi.order.slot.endTime}` : 'Walk-in';
-    if (!aggregated[key]) aggregated[key] = { name: oi.menuItem.name, quantity: 0, slots: {} };
-    aggregated[key].quantity += oi.quantity;
-    aggregated[key].slots[slotLabel] = (aggregated[key].slots[slotLabel] || 0) + oi.quantity;
+  for (const row of rows) {
+    const slotLabel = row.startTime ? `${row.startTime}-${row.endTime}` : 'Walk-in';
+    aggregated[row.menuItemId] ??= { name: row.name, quantity: 0, slots: {} };
+    aggregated[row.menuItemId].quantity += row.quantity;
+    aggregated[row.menuItemId].slots[slotLabel] = (aggregated[row.menuItemId].slots[slotLabel] || 0) + row.quantity;
   }
 
   return res.json({ prepSheet: Object.values(aggregated) });

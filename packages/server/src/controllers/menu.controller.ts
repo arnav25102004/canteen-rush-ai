@@ -4,7 +4,7 @@ import { AuthRequest, canteenScope } from '../middleware/auth';
 import { uploadImage, cloudinaryConfigured } from '../config/cloudinary';
 import { searchMenuByText } from '../services/menu.service';
 import { getCachedMenu, refreshMenu } from '../services/catalogCache.service';
-import { sendCachedJson } from '../config/cache';
+import { cached, sendCachedJson } from '../config/cache';
 import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import fs from 'fs';
@@ -82,8 +82,14 @@ export async function searchMenuGlobal(req: AuthRequest, res: Response) {
     return res.status(400).json({ error: 'Institution unknown: sign in with an institution or pass ?institutionId=' });
   }
 
-  const items = await searchMenuByText(institutionId, q);
-  return res.json({ items });
+  const scope = institutionId;
+  const term = q.trim().toLowerCase();
+  const body = await cached(
+    `menu-search:${scope}:${term}`,
+    async () => ({ items: await searchMenuByText(scope, q) }),
+    { ttl: 15, stale: 30, cacheIf: (v) => v.items.length > 0 },
+  );
+  return res.json(body);
 }
 
 /** Vendor's own full menu, including items marked unavailable (the public menu hides those). */

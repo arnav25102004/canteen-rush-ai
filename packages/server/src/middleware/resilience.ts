@@ -1,30 +1,38 @@
 import { randomUUID } from 'crypto';
-import { performance } from 'perf_hooks';
+import { monitorEventLoopDelay, performance } from 'perf_hooks';
 import { NextFunction, Request, Response } from 'express';
 import { logger } from '../utils/logger';
 import { metrics } from '../utils/metrics';
 
 const MAX_IN_FLIGHT = Number(process.env.MAX_IN_FLIGHT) || 2000;
-// Between these, a growing share of non-critical requests is shed, so load tapers instead of flapping.
-const SHED_FROM_UTILIZATION = 0.92;
-const SHED_MAX_UTILIZATION = 0.995;
+// Between these p99 event-loop delays, a growing share of non-critical requests is shed.
+// Delay, not CPU use: a process at 100% CPU that still answers quickly is at its best throughput.
+const SHED_FROM_LAG_MS = 200;
+const SHED_FULL_LAG_MS = 800;
 const SHED_MAX_SHARE = 0.8;
+const LAG_RESOLUTION_MS = 10;
 const SLOW_REQUEST_MS = 1000;
 const LOG_SAMPLE_RATE = 0.01;
 const REQUEST_DEADLINE_MS = 12_000;
 
 let inFlight = 0;
 let utilization = 0;
+let lagMs = 0;
 let lastElu = performance.eventLoopUtilization();
+const lagMonitor = monitorEventLoopDelay({ resolution: LAG_RESOLUTION_MS });
+lagMonitor.enable();
 
 setInterval(() => {
   const now = performance.eventLoopUtilization();
   utilization = performance.eventLoopUtilization(now, lastElu).utilization;
   lastElu = now;
+  lagMs = Math.max(0, lagMonitor.percentile(99) / 1e6 - LAG_RESOLUTION_MS);
+  lagMonitor.reset();
 }, 500).unref();
 
 metrics.gauge('http_in_flight', () => inFlight);
 metrics.gauge('event_loop_utilization', () => utilization);
+metrics.gauge('event_loop_lag_p99_ms', () => lagMs);
 
 /** Request id, latency metric, and sampled access log (all errors and slow requests are kept). */
 export function observe(req: Request, res: Response, next: NextFunction) {
@@ -49,7 +57,7 @@ const isCritical = (req: Request) =>
 
 /** Sheds non-critical work with a retryable 503 instead of letting latency grow without limit. */
 export function shedLoad(req: Request, res: Response, next: NextFunction) {
-  const share = Math.min(SHED_MAX_SHARE, (utilization - SHED_FROM_UTILIZATION) / (SHED_MAX_UTILIZATION - SHED_FROM_UTILIZATION));
+  const share = Math.min(SHED_MAX_SHARE, (lagMs - SHED_FROM_LAG_MS) / (SHED_FULL_LAG_MS - SHED_FROM_LAG_MS));
   if (!isCritical(req) && (inFlight >= MAX_IN_FLIGHT || (share > 0 && Math.random() < share))) {
     metrics.inc('http_shed_total');
     res.setHeader('Retry-After', String(1 + Math.floor(Math.random() * 3)));

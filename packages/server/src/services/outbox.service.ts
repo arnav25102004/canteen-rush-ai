@@ -35,6 +35,12 @@ export function enqueue(client: Client, event: OutboxEvent) {
   return client.outboxEvent.create({ data: { type: event.type, payload: event.payload as Prisma.InputJsonValue } });
 }
 
+export function enqueueMany(client: Client, events: OutboxEvent[]) {
+  return client.outboxEvent.createMany({
+    data: events.map((e) => ({ type: e.type, payload: e.payload as Prisma.InputJsonValue })),
+  });
+}
+
 async function claim(): Promise<Row[]> {
   // An event that keeps killing its worker never reaches fail(), so retire it here.
   const dead = await prisma.$executeRaw(Prisma.sql`

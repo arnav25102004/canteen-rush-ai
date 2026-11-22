@@ -2,6 +2,7 @@ import { prisma } from '../config/database';
 import { cached, CacheOptions, invalidate, writeThrough } from '../config/cache';
 import { getCanteenMenuData } from './menu.service';
 import { logger } from '../utils/logger';
+import { OrderStatus } from '@prisma/client';
 
 type IoLike = { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
 type Menu = Awaited<ReturnType<typeof getCanteenMenuData>>;
@@ -21,6 +22,20 @@ const loadMenu = (canteenId: string, diet: DietKey) => () =>
 export const canteenKey = (id: string) => `canteen:${id}`;
 export const CANTEEN_LIST_KEY = 'canteens:active';
 export const slotsKey = (canteenId: string, day: string) => `slots:${canteenId}:${day}`;
+export const institutionCanteensKey = (id: string) => `institution-canteens:${id}`;
+
+export const ACTIVE_ORDER_STATUSES: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
+
+/** Active-order count per canteen in one grouped query. */
+export async function activeOrderCounts(canteenIds: string[]): Promise<Map<string, number>> {
+  if (!canteenIds.length) return new Map();
+  const rows = await prisma.order.groupBy({
+    by: ['canteenId'],
+    where: { canteenId: { in: canteenIds }, status: { in: ACTIVE_ORDER_STATUSES } },
+    _count: { _all: true },
+  });
+  return new Map(rows.map((r) => [r.canteenId, r._count._all]));
+}
 
 export function getCachedMenu(canteenId: string, diet?: string | null) {
   const d = dietKey(diet);
@@ -42,8 +57,15 @@ export async function refreshMenu(canteenId: string, io?: IoLike, change?: Recor
 }
 
 /** Canteen rows changed: the list and detail views reload on next read. */
-export function refreshCanteen(id: string) {
-  return invalidate(CANTEEN_LIST_KEY, canteenKey(id));
+export async function refreshCanteen(id: string) {
+  const keys = [CANTEEN_LIST_KEY, canteenKey(id)];
+  try {
+    const canteen = await prisma.canteen.findUnique({ where: { id }, select: { institutionId: true } });
+    if (canteen) keys.push(institutionCanteensKey(canteen.institutionId));
+  } catch (err) {
+    logger.warn('Canteen cache lookup failed', { id, err: (err as Error)?.message }); // its short TTL still applies
+  }
+  await invalidate(...keys);
 }
 
 export function invalidateSlots(canteenId: string, date: Date | string) {

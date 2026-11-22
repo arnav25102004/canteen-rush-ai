@@ -2,13 +2,11 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { validateBody } from '../utils/helpers';
-import { OrderStatus, Prisma } from '@prisma/client';
+import { Prisma } from '@prisma/client';
 import { FEATURES } from '../config/features';
 import { cached, sendCachedJson } from '../config/cache';
-import { CANTEEN_LIST_KEY, canteenKey, refreshCanteen } from '../services/catalogCache.service';
+import { ACTIVE_ORDER_STATUSES, activeOrderCounts, CANTEEN_LIST_KEY, canteenKey, refreshCanteen } from '../services/catalogCache.service';
 import { z } from 'zod';
-
-const ACTIVE_STATUSES = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
 
 const canteenSchema = z.object({
   name: z.string().min(2),
@@ -36,12 +34,15 @@ const PUBLIC_CANTEEN_SELECT = {
   createdAt: true, updatedAt: true,
   razorpayAccountId: true, // only used to derive onlinePaymentEnabled; stripped by toPublicCanteen
   vendor: { select: { name: true } },
-  _count: { select: { orders: { where: { status: { in: ACTIVE_STATUSES } } } } },
 } satisfies Prisma.CanteenSelect;
 
-function toPublicCanteen<T extends { razorpayAccountId: string | null }>(c: T) {
+function toPublicCanteen<T extends { id: string; razorpayAccountId: string | null }>(c: T, activeOrders: Map<string, number>) {
   const { razorpayAccountId, ...rest } = c;
-  return { ...rest, onlinePaymentEnabled: FEATURES.RAZORPAY_ENABLED && !!razorpayAccountId };
+  return {
+    ...rest,
+    _count: { orders: activeOrders.get(c.id) ?? 0 },
+    onlinePaymentEnabled: FEATURES.RAZORPAY_ENABLED && !!razorpayAccountId,
+  };
 }
 
 export async function listCanteens(req: Request, res: Response) {
@@ -55,7 +56,8 @@ export async function listCanteens(req: Request, res: Response) {
       select: PUBLIC_CANTEEN_SELECT,
       orderBy: { name: 'asc' },
     });
-    return { canteens: canteens.map(toPublicCanteen) };
+    const activeOrders = await activeOrderCounts(canteens.map((c) => c.id));
+    return { canteens: canteens.map((c) => toPublicCanteen(c, activeOrders)) };
   };
   // Only the default list is cached, so query strings can't create unlimited cache keys.
   if (campus || includeInactive === 'true') return res.json(await load());
@@ -66,7 +68,7 @@ export async function getCanteen(req: Request, res: Response) {
   const { id } = req.params;
   const body = await cached(canteenKey(id), async () => {
     const canteen = await prisma.canteen.findUnique({ where: { id }, select: PUBLIC_CANTEEN_SELECT });
-    return canteen ? { canteen: toPublicCanteen(canteen) } : null;
+    return canteen ? { canteen: toPublicCanteen(canteen, await activeOrderCounts([canteen.id])) } : null;
   }, { ttl: 10, stale: 60, cacheIf: (b) => !!b });
   if (!body) return res.status(404).json({ error: 'Canteen not found' });
   return sendCachedJson(req, res, body, 'public, max-age=0, s-maxage=5, stale-while-revalidate=10');
@@ -77,7 +79,7 @@ export async function getCanteenLiveStats(req: Request, res: Response) {
 
   const stats = await cached(`canteen-live:${id}`, async () => {
     const [activeOrders, canteen] = await Promise.all([
-      prisma.order.count({ where: { canteenId: id, status: { in: ACTIVE_STATUSES } } }),
+      prisma.order.count({ where: { canteenId: id, status: { in: ACTIVE_ORDER_STATUSES } } }),
       prisma.canteen.findUnique({ where: { id }, select: { avgPrepTime: true } }),
     ]);
     return {

@@ -3,7 +3,7 @@ import Razorpay from 'razorpay';
 import { randomUUID } from 'crypto';
 import { prisma } from '../config/database';
 import { generateQRToken } from './qr.service';
-import { enqueue } from './outbox.service';
+import { enqueue, enqueueMany } from './outbox.service';
 import { invalidateSlots } from './catalogCache.service';
 import { withTimeout } from '../middleware/resilience';
 import { validatePointsRedemption, redeemPoints, refundRedeemedPoints } from './loyalty.service';
@@ -196,10 +196,17 @@ export async function quoteOrder(draft: OrderDraft): Promise<OrderQuote> {
   const slotId = draft.slotId ?? undefined;
 
   // Validate items belong to this canteen and are available
-  const menuItems = await prisma.menuItem.findMany({
-    where: { id: { in: items.map((i) => i.menuItemId) }, canteenId },
-    select: { id: true, name: true, price: true, counterPrice: true, isAvailable: true, isVeg: true },
-  });
+  const [menuItems, canteen, slot] = await Promise.all([
+    prisma.menuItem.findMany({
+      where: { id: { in: items.map((i) => i.menuItemId) }, canteenId },
+      select: { id: true, name: true, price: true, counterPrice: true, isAvailable: true, isVeg: true },
+    }),
+    prisma.canteen.findUnique({
+      where: { id: canteenId },
+      select: { id: true, name: true, isActive: true, razorpayAccountId: true, institutionId: true },
+    }),
+    slotId ? prisma.pickupSlot.findUnique({ where: { id: slotId } }) : null,
+  ]);
 
   if (menuItems.length !== new Set(items.map((i) => i.menuItemId)).size) {
     throw new AppError(400, 'One or more items are invalid or belong to a different canteen');
@@ -210,10 +217,6 @@ export async function quoteOrder(draft: OrderDraft): Promise<OrderQuote> {
     throw new AppError(400, `${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
   }
 
-  const canteen = await prisma.canteen.findUnique({
-    where: { id: canteenId },
-    select: { id: true, name: true, isActive: true, razorpayAccountId: true, institutionId: true },
-  });
   if (!canteen || !canteen.isActive) throw new AppError(404, 'Canteen not found');
   if (draft.institutionId && canteen.institutionId !== draft.institutionId) throw new AppError(404, 'Canteen not found');
 
@@ -222,7 +225,6 @@ export async function quoteOrder(draft: OrderDraft): Promise<OrderQuote> {
   let slotCap = 0;
   let slotInfo: OrderQuote['slot'] = null;
   if (slotId) {
-    const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
     if (!slot || slot.canteenId !== canteenId || !slot.isOpen) {
       throw new AppError(400, 'This time slot is closed. Please choose another slot.');
     }
@@ -297,23 +299,28 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
 
   const quote = await quoteOrder({ userRole, canteenId, slotId, items });
   const { canteen, slotCap, subtotal, totalCounterPrice } = quote;
+  const orderId = randomUUID();
   const orderItems = quote.lines.map((l) => ({
+    id: randomUUID(),
+    orderId,
     menuItemId: l.menuItemId,
     quantity: l.quantity,
     unitPrice: l.unitPrice,
     totalPrice: l.totalPrice,
-    customizations: l.customizations,
+    customizations: l.customizations as Prisma.InputJsonValue,
     notes: l.notes,
   }));
 
-  const pointsValidation = await validatePointsRedemption(userId, pointsToRedeem);
+  const [pointsValidation, wallet] = await Promise.all([
+    validatePointsRedemption(userId, pointsToRedeem),
+    prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } }),
+  ]);
   if (!pointsValidation.valid) throw new AppError(400, pointsValidation.error || 'Invalid points redemption');
   const pointsDiscount = pointsValidation.discountAmount;
 
   if (pointsDiscount > subtotal) throw new AppError(400, 'Points discount is larger than the order total');
 
   // Wallet credit is applied automatically
-  const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
   const afterPointsDiscount = subtotal - pointsDiscount;
   const walletDeduction = Math.min(wallet ? Number(wallet.balance) : 0, afterPointsDiscount);
   const totalAmount = Math.max(0, afterPointsDiscount - walletDeduction);
@@ -321,7 +328,6 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   const { paymentMethod, paymentStatus, status } = decidePayment(totalAmount, !!canteen.razorpayAccountId);
   const orderNumber = await generateOrderNumber();
 
-  const orderId = randomUUID();
   // QR token the vendor scans at pickup
   const qrToken = generateQRToken({ orderId, userId, orderNumber, canteenId });
 
@@ -349,19 +355,9 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
         upiOrderNote: orderNumber,
         specialInstructions,
         pointsRedeemed: pointsToRedeem,
-        items: {
-          create: orderItems.map((oi) => ({
-            menuItem: { connect: { id: oi.menuItemId } },
-            quantity: oi.quantity,
-            unitPrice: oi.unitPrice,
-            totalPrice: oi.totalPrice,
-            customizations: oi.customizations as object,
-            notes: oi.notes,
-          })),
-        },
       },
-      include: ORDER_RESPONSE_INCLUDE,
     });
+    await tx.orderItem.createMany({ data: orderItems });
 
     if (walletDeduction > 0 && wallet) {
       const { count } = await tx.wallet.updateMany({
@@ -386,17 +382,13 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
       await redeemPoints(tx, userId, newOrder.id, pointsToRedeem, pointsDiscount);
     }
 
-    await enqueue(tx, {
-      type: 'menu.totalOrders',
-      payload: { items: items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })) },
-    });
-    // Razorpay orders announce themselves from the webhook once payment is captured
-    if (paymentMethod !== 'RAZORPAY') {
-      await enqueue(tx, {
-        type: 'notification.order',
-        payload: { userId, orderId, orderNumber, status: OrderStatus.CONFIRMED },
-      });
-    }
+    await enqueueMany(tx, [
+      { type: 'menu.totalOrders', payload: { items: items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })) } },
+      // Razorpay orders announce themselves from the webhook once payment is captured
+      ...(paymentMethod !== 'RAZORPAY'
+        ? [{ type: 'notification.order' as const, payload: { userId, orderId, orderNumber, status: OrderStatus.CONFIRMED } }]
+        : []),
+    ]);
 
     // Last, so the contended slot row is locked for the shortest time possible.
     // Conditional updates: a concurrent order can't overbook the slot or overspend the wallet.
@@ -408,7 +400,12 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
       if (count === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
     }
 
-    return newOrder;
+    // Built from what was just written, so the response needs no extra queries.
+    return {
+      ...newOrder,
+      items: orderItems.map((item, i) => ({ ...item, menuItem: { name: quote.lines[i].name } })),
+      slot: quote.slot ? { startTime: quote.slot.startTime, endTime: quote.slot.endTime } : null,
+    };
     });
   } catch (err) {
     // Two copies of the same request raced: the loser returns the winner's order.
