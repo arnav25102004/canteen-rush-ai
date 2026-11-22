@@ -11,6 +11,7 @@ export const redis = new Redis(process.env.REDIS_URL || 'redis://localhost:6379'
   connectTimeout: 5000,
   commandTimeout: 500, // a slow cache must never be slower than the DB it protects
   lazyConnect: true,
+  enableAutoPipelining: true, // concurrent commands share one socket write
   // Never give up: Redis may come back at any time. Capped backoff.
   retryStrategy(times) {
     return Math.min(times * 200, 5000);

@@ -4,7 +4,7 @@ import { randomUUID } from 'crypto';
 import { prisma } from '../config/database';
 import { generateQRToken } from './qr.service';
 import { enqueue, enqueueMany, OutboxEvent } from './outbox.service';
-import { invalidateSlots } from './catalogCache.service';
+import { invalidateOrderViews, invalidateSlots } from './catalogCache.service';
 import { withTimeout } from '../middleware/resilience';
 import { validatePointsRedemption, redeemPoints, refundRedeemedPoints } from './loyalty.service';
 import { FEATURES } from '../config/features';
@@ -463,7 +463,10 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
     throw err;
   }
 
-  if (quote.slot) await invalidateSlots(canteenId, quote.slot.date);
+  await Promise.all([
+    invalidateOrderViews(orderId, userId),
+    quote.slot ? invalidateSlots(canteenId, quote.slot.date) : undefined,
+  ]);
 
   const ioServer = io as IoLike;
 
@@ -603,6 +606,7 @@ export async function cancelOrder(
     return order;
   });
 
+  await invalidateOrderViews(orderId, order.userId);
   if (order.slot) await invalidateSlots(order.canteenId, order.slot.date);
 
   const ioServer = io as IoLike;
@@ -719,6 +723,7 @@ export async function markOrderNoShow(orderId: string): Promise<boolean> {
   });
 
   if (!order) return false;
+  await invalidateOrderViews(orderId, order.userId);
   if (order.slot) await invalidateSlots(order.canteenId, order.slot.date);
   return true;
 }

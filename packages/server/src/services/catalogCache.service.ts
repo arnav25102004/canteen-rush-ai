@@ -1,5 +1,5 @@
 import { prisma } from '../config/database';
-import { cached, CacheOptions, invalidate, writeThrough } from '../config/cache';
+import { cached, CacheOptions, invalidate, invalidateLocal, writeThrough } from '../config/cache';
 import { getCanteenMenuData } from './menu.service';
 import { logger } from '../utils/logger';
 import { OrderStatus } from '@prisma/client';
@@ -23,6 +23,15 @@ export const canteenKey = (id: string) => `canteen:${id}`;
 export const CANTEEN_LIST_KEY = 'canteens:active';
 export const slotsKey = (canteenId: string, day: string) => `slots:${canteenId}:${day}`;
 export const institutionCanteensKey = (id: string) => `institution-canteens:${id}`;
+
+export const orderViewKey = (orderId: string) => `order-view:${orderId}`;
+export const lastOrderKey = (userId: string) => `last-order:${userId}`;
+export const meKey = (userId: string) => `me:${userId}`;
+
+/** Call after a commit that changes an order, before telling clients about it. Never throws. */
+export function invalidateOrderViews(orderId: string, userId?: string | null) {
+  return invalidateLocal(orderViewKey(orderId), ...(userId ? [lastOrderKey(userId)] : []));
+}
 
 export const ACTIVE_ORDER_STATUSES: OrderStatus[] = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
 

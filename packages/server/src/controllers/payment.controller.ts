@@ -3,6 +3,7 @@ import { logger } from '../utils/logger';
 import crypto from 'crypto';
 import { prisma } from '../config/database';
 import { enqueue } from '../services/outbox.service';
+import { invalidateOrderViews } from '../services/catalogCache.service';
 import { generatePickupCode } from '../utils/helpers';
 import { OrderStatus, Prisma } from '@prisma/client';
 
@@ -127,6 +128,7 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
       return res.json({ status: 'ok' });
     }
 
+    await invalidateOrderViews(order.id, order.userId);
     const updatedOrder = { ...order, status: OrderStatus.CONFIRMED, paymentStatus: 'PAID', pickupCode };
 
     req.io?.to(`canteen:${order.canteenId}`).emit('order:new', { order: updatedOrder });

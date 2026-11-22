@@ -1,4 +1,6 @@
 import { invalidateAuthUser } from '../services/authUser.service';
+import { cached, invalidateLocal } from '../config/cache';
+import { meKey } from '../services/catalogCache.service';
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { verifyFirebaseToken, devAuthEnabled } from '../config/firebase';
@@ -202,14 +204,17 @@ export async function register(req: Request, res: Response) {
 }
 
 export async function getMe(req: AuthRequest, res: Response) {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.id },
-    include: {
-      wallet: { select: { balance: true } },
-      vendorCanteen: { select: { id: true, name: true } },
-    },
-  });
-  return res.json({ user });
+  const userId = req.user!.id;
+  const body = await cached(meKey(userId), async () => ({
+    user: await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        wallet: { select: { balance: true } },
+        vendorCanteen: { select: { id: true, name: true } },
+      },
+    }),
+  }), { ttl: 3, stale: 0, local: true });
+  return res.setHeader('Cache-Control', 'private, no-store').json(body);
 }
 
 export async function updateMe(req: AuthRequest, res: Response) {
@@ -220,7 +225,7 @@ export async function updateMe(req: AuthRequest, res: Response) {
     where: { id: req.user!.id },
     data: parse.data,
   });
-  await invalidateAuthUser(req.user!.firebaseUid);
+  await Promise.all([invalidateAuthUser(req.user!.firebaseUid), invalidateLocal(meKey(req.user!.id))]);
   return res.json({ user });
 }
 

@@ -4,6 +4,8 @@ import { AuthRequest } from '../middleware/auth';
 import { placeOrder, cancelOrder, assertNotStrikeBanned, findRecentOrdersForUser } from '../services/order.service';
 import { verifyQRToken, generateQRCodeDataURL } from '../services/qr.service';
 import { enqueue } from '../services/outbox.service';
+import { cached } from '../config/cache';
+import { invalidateOrderViews, lastOrderKey, orderViewKey } from '../services/catalogCache.service';
 import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '../utils/helpers';
 import { computeNudgeAt } from '../utils/feedbackNudge';
 import { z } from 'zod';
@@ -50,8 +52,12 @@ export async function createOrder(req: AuthRequest, res: Response) {
 }
 
 export async function getLastOrder(req: AuthRequest, res: Response) {
-  const [order = null] = await findRecentOrdersForUser(req.user!.id, 1);
-  return res.json({ order });
+  const userId = req.user!.id;
+  const body = await cached(lastOrderKey(userId), async () => {
+    const [order = null] = await findRecentOrdersForUser(userId, 1);
+    return { order };
+  }, { ttl: 5, stale: 0, local: true });
+  return res.setHeader('Cache-Control', 'private, no-store').json(body);
 }
 
 export async function getMyOrders(req: AuthRequest, res: Response) {
@@ -96,24 +102,31 @@ export async function getMyOrders(req: AuthRequest, res: Response) {
 
 export async function getOrder(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: {
-      canteen: { select: { id: true, name: true, imageUrl: true, location: true, vendorUpiId: true, vendorUpiName: true } },
-      slot: true,
-      items: { include: { menuItem: { select: { name: true, imageUrl: true, price: true } } } },
-      ratings: true,
-    },
-  });
+  // The QR token is a pickup credential: it stays out of this cached view and comes only from /qr.
+  const body = await cached(orderViewKey(id), async () => {
+    const row = await prisma.order.findUnique({
+      where: { id },
+      include: {
+        canteen: { select: { id: true, name: true, imageUrl: true, location: true, vendorUpiId: true, vendorUpiName: true } },
+        slot: true,
+        items: { include: { menuItem: { select: { name: true, imageUrl: true, price: true } } } },
+        ratings: true,
+      },
+    });
+    if (!row) return null;
+    const { qrCode: _qrCode, ...order } = row;
+    // `rating` (first rating) stays for older app versions for one release; new clients use `ratings`.
+    return { order: { ...order, rating: order.ratings[0] ?? null } };
+  }, { ttl: 3, stale: 0, local: true, cacheIf: (v) => !!v });
 
-  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!body) return res.status(404).json({ error: 'Order not found' });
+  const { order } = body;
   const isOwner = order.userId === req.user!.id;
   const isAdmin = req.user!.role === UserRole.ADMIN;
   const isThisCanteensVendor = req.user!.role === UserRole.VENDOR && order.canteen.id === req.user!.canteenId;
   if (!isOwner && !isAdmin && !isThisCanteensVendor) return res.status(403).json({ error: 'Forbidden' });
 
-  // `rating` (first rating) stays for older app versions for one release; new clients use `ratings`.
-  return res.json({ order: { ...order, rating: order.ratings[0] ?? null } });
+  return res.setHeader('Cache-Control', 'private, no-store').json(body);
 }
 
 export async function getOrderQR(req: AuthRequest, res: Response) {
@@ -223,6 +236,7 @@ export async function updateOrderStatus(req: AuthRequest, res: Response) {
     return true;
   });
   if (!changed) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+  await invalidateOrderViews(id, order.userId);
   const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status, estimatedReadyAt: updated.estimatedReadyAt });
@@ -243,7 +257,7 @@ export async function scanQR(req: AuthRequest, res: Response) {
 
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { status: true, qrScanned: true, canteenId: true, paymentMethod: true },
+    select: { status: true, qrScanned: true, canteenId: true, paymentMethod: true, userId: true },
   });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status !== OrderStatus.READY) return res.status(400).json({ error: 'Order is not ready yet' });
@@ -268,6 +282,7 @@ export async function scanQR(req: AuthRequest, res: Response) {
     return true;
   });
   if (!collected) return res.status(400).json({ error: 'Already collected' });
+  await invalidateOrderViews(id, order.userId);
   const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.PICKED_UP });
@@ -309,6 +324,7 @@ export async function respondToOrder(req: AuthRequest, res: Response) {
       return true;
     });
     if (!accepted) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+    await invalidateOrderViews(id, order.userId);
     const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
     emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.ACCEPTED });
     return res.json({ order: updated });

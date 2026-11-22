@@ -60,6 +60,8 @@ const server = http.createServer(app);
 // TRUST_PROXY_HOPS=2 behind a CDN) — trusting all hops would let a client spoof
 // X-Forwarded-For and bypass the limiter entirely.
 app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) || 1);
+// Cached responses set their own ETag; hashing every dynamic response is wasted CPU.
+app.disable('etag');
 
 // api = HTTP + sockets, worker = queue + cron, all = both (single-instance deploys).
 const ROLE = process.env.PROCESS_ROLE === 'api' || process.env.PROCESS_ROLE === 'worker' ? process.env.PROCESS_ROLE : 'all';
@@ -156,7 +158,8 @@ app.use('/api/auth', authLimiter);
 app.use('/api/auth/forgot-password', forgotPasswordLimiter);
 
 // ── Body parsing ──────────────────────────────────────────────────────────────
-app.use(compression());
+// Small JSON costs more CPU to compress than it saves on the wire.
+app.use(compression({ threshold: 2048 }));
 app.use(express.json({
   limit: '100kb',
   verify: (req: any, _res, buf) => {
@@ -232,8 +235,8 @@ async function bootstrap() {
     }
     if (runsApi && redis.status === 'ready') {
       // Delivers room events across instances. Without it, a single instance still works.
-      const pub = redis.duplicate({ commandTimeout: undefined });
-      const sub = redis.duplicate({ commandTimeout: undefined });
+      const pub = redis.duplicate({ commandTimeout: undefined, enableAutoPipelining: false });
+      const sub = redis.duplicate({ commandTimeout: undefined, enableAutoPipelining: false });
       pub.on('error', () => {});
       sub.on('error', () => {});
       io.adapter(createAdapter(pub, sub));

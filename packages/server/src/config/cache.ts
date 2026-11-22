@@ -30,6 +30,8 @@ export interface CacheOptions<T = unknown> {
   stale?: number;
   /** Return false to skip caching this value (e.g. an empty result for an unknown id). */
   cacheIf?: (value: T) => boolean;
+  /** Per-user or very short-lived value: keep it in this process and skip Redis reads and writes. */
+  local?: boolean;
 }
 
 interface Entry {
@@ -155,7 +157,7 @@ async function store<T>(key: string, value: T, gen: string, seenLocal: number, o
   // A write landed during this load: hand the caller the value, but do not store it.
   if ((localGen.get(key) ?? 0) !== seenLocal) return JSON.parse(raw);
   const entry = remember(key, raw, freshUntil, freshUntil + (opts.stale ?? 0) * 1000);
-  await writeL2(key, raw, freshUntil, gen, opts);
+  if (!opts.local) await writeL2(key, raw, freshUntil, gen, opts);
   return entry.value as T;
 }
 
@@ -164,7 +166,7 @@ function loadShared<T>(key: string, load: () => Promise<T>, opts: CacheOptions<T
   if (running) return running as Promise<T>;
   const flight = (async () => {
     const seenLocal = localGen.get(key) ?? 0;
-    const gen = await readGen(key);
+    const gen = opts.local ? '0' : await readGen(key);
     metrics.inc('cache_db_loads_total');
     return store(key, await load(), gen, seenLocal, opts);
   })().finally(() => flights.delete(key));
@@ -196,13 +198,13 @@ function track(key: string, load: () => Promise<unknown>, opts: CacheOptions<any
 /** Read-through lookup. Throws only when the DB fails and no usable value exists. */
 export async function cached<T>(key: string, load: () => Promise<T>, opts: CacheOptions<T>): Promise<T> {
   if (disabled()) return load();
-  track(key, load, opts);
+  if (opts.stale) track(key, load, opts);
 
   const now = Date.now();
   const local = l1.get(key);
   // With Redis, L1 is a short window so instances converge. Without it, L1 is the only
   // cache and holds for the full TTL (running several instances requires Redis).
-  if (local && now < local.freshUntil && (!redisEnabled || now < local.l1Until)) {
+  if (local && now < local.freshUntil && (!redisEnabled || opts.local || now < local.l1Until)) {
     metrics.inc('cache_hits_total', { level: 'l1' });
     return local.value as T;
   }
@@ -212,7 +214,7 @@ export async function cached<T>(key: string, load: () => Promise<T>, opts: Cache
     return local.value as T;
   }
 
-  const remote = await readL2(key, opts);
+  const remote = opts.local ? null : await readL2(key, opts);
   if (remote) {
     if (now < remote.freshUntil) {
       metrics.inc('cache_hits_total', { level: 'l2' });
@@ -282,6 +284,16 @@ export async function invalidate(...keys: string[]): Promise<void> {
   }));
 }
 
+/** Drops `local` keys in every process. Never throws. */
+export async function invalidateLocal(...keys: string[]): Promise<void> {
+  if (disabled()) return;
+  await Promise.all(keys.map(async (key) => {
+    bumpLocal(key);
+    l1.delete(key);
+    await publish(key);
+  }));
+}
+
 async function refreshDueKeys() {
   if (dirty.size && redisReady()) await replayDirty();
   const now = Date.now();
@@ -335,7 +347,7 @@ export async function startCacheSync(): Promise<void> {
   if (!redisEnabled) return;
 
   redis.on('ready', () => void replayDirty());
-  subscriber = redis.duplicate({ lazyConnect: true, commandTimeout: undefined });
+  subscriber = redis.duplicate({ lazyConnect: true, commandTimeout: undefined, enableAutoPipelining: false });
   subscriber.on('error', () => { /* reconnects on its own */ });
   subscriber.on('message', (_channel, message) => {
     const sep = message.indexOf('|');

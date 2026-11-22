@@ -38,7 +38,7 @@ export async function listSlotsForCanteen(req: AuthRequest, res: Response) {
   const body = await cached(
     `slots-view:${canteenId}:${day}:${role}`,
     () => listSlotsWithAvailability(canteenId, day, role),
-    { ttl: 1, stale: 0, cacheIf: (v) => v.slots.length > 0 },
+    { ttl: 1, stale: 0, local: true, cacheIf: (v) => v.slots.length > 0 },
   );
   return sendCachedJson(req, res, body, 'private, no-store');
 }
