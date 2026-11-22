@@ -104,7 +104,7 @@ export async function refundRedeemedPoints(
 export async function awardPointsForOrder(orderId: string): Promise<void> {
   const order = await prisma.order.findUnique({
     where: { id: orderId },
-    include: { user: { include: { loyaltyAccount: true } } },
+    include: { user: { select: { isDeleted: true } } },
   });
 
   if (!order || order.status !== 'PICKED_UP') return;
@@ -112,7 +112,7 @@ export async function awardPointsForOrder(orderId: string): Promise<void> {
   // Accounts are anonymised (not deleted) so userId/user survive — but a
   // deleted user's loyaltyAccount was removed on deletion; don't resurrect it.
   if (!order.userId || !order.user || order.user.isDeleted) return;
-  const { userId, user } = order;
+  const { userId } = order;
 
   const orderHour = istHour(order.createdAt);
   const isDoublePoints = orderHour < DOUBLE_POINTS_BEFORE_HOUR;
@@ -120,38 +120,33 @@ export async function awardPointsForOrder(orderId: string): Promise<void> {
   const pointsToAward = isDoublePoints ? basePoints * 2 : basePoints;
   const expiresAt = new Date(Date.now() + 90 * 24 * 60 * 60 * 1000);
 
-  let loyaltyAccount = user.loyaltyAccount;
-  if (!loyaltyAccount) {
-    loyaltyAccount = await prisma.loyaltyAccount.create({
-      data: { userId, totalPoints: 0, lifetimePoints: 0, totalSaved: 0 },
+  await prisma.$transaction(async (tx) => {
+    // Claimed first: a retried event finds pointsEarned already set and awards nothing.
+    const { count } = await tx.order.updateMany({
+      where: { id: order.id, status: 'PICKED_UP', pointsEarned: 0 },
+      data: { pointsEarned: pointsToAward },
     });
-  }
+    if (count === 0) return;
 
-  const newBalance = loyaltyAccount.totalPoints + pointsToAward;
-
-  await prisma.$transaction([
-    prisma.loyaltyAccount.update({
-      where: { id: loyaltyAccount.id },
+    const account = await tx.loyaltyAccount.upsert({
+      where: { userId },
+      create: { userId, totalPoints: pointsToAward, lifetimePoints: pointsToAward, totalSaved: 0 },
+      update: { totalPoints: { increment: pointsToAward }, lifetimePoints: { increment: pointsToAward } },
+    });
+    await tx.pointTransaction.create({
       data: {
-        totalPoints: { increment: pointsToAward },
-        lifetimePoints: { increment: pointsToAward },
-      },
-    }),
-    prisma.pointTransaction.create({
-      data: {
-        loyaltyId: loyaltyAccount.id,
+        loyaltyId: account.id,
         orderId: order.id,
         type: 'EARNED',
         points: pointsToAward,
         description: isDoublePoints
           ? `2× bonus: Earned ${pointsToAward} pts for Order #${order.orderNumber} (early bird!)`
           : `Earned ${pointsToAward} pts for Order #${order.orderNumber}`,
-        balanceAfter: newBalance,
+        balanceAfter: account.totalPoints,
         expiresAt,
       },
-    }),
-    prisma.order.update({ where: { id: order.id }, data: { pointsEarned: pointsToAward } }),
-  ]);
+    });
+  });
 }
 
 export async function getLoyaltyAccount(userId: string) {

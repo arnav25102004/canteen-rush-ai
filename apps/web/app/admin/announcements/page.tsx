@@ -7,25 +7,45 @@ export default function AnnouncementsPage() {
   const [announcements, setAnnouncements] = useState<any[]>([]);
   const [form, setForm] = useState({ title: '', body: '', startsAt: '', endsAt: '' });
   const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState('');
 
-  const load = () => api.get('/admin/announcements').then(r => setAnnouncements(r.data.announcements || []));
+  const load = () => api.get('/admin/announcements')
+    .then(r => setAnnouncements(r.data.announcements || []))
+    .catch(() => setError('Could not load announcements.'));
 
   useEffect(() => { load(); }, []);
 
   async function create() {
-    await api.post('/admin/announcements', {
-      ...form,
-      startsAt: new Date(form.startsAt).toISOString(),
-      endsAt: form.endsAt ? new Date(form.endsAt).toISOString() : undefined,
-    });
-    setShowForm(false);
-    setForm({ title: '', body: '', startsAt: '', endsAt: '' });
-    load();
+    setError('');
+    if (!form.title.trim() || !form.body.trim() || !form.startsAt) {
+      setError('Title, message and start time are required.');
+      return;
+    }
+    if (form.endsAt && new Date(form.endsAt) <= new Date(form.startsAt)) {
+      setError('End time must be after the start time.');
+      return;
+    }
+    try {
+      await api.post('/admin/announcements', {
+        ...form,
+        startsAt: new Date(form.startsAt).toISOString(),
+        endsAt: form.endsAt ? new Date(form.endsAt).toISOString() : undefined,
+      });
+      setShowForm(false);
+      setForm({ title: '', body: '', startsAt: '', endsAt: '' });
+      load();
+    } catch {
+      setError('Could not publish the announcement.');
+    }
   }
 
   async function toggle(id: string) {
-    await api.patch(`/admin/announcements/${id}/toggle`);
-    load();
+    try {
+      await api.patch(`/admin/announcements/${id}/toggle`);
+      load();
+    } catch {
+      setError('Could not update the announcement.');
+    }
   }
 
   return (
@@ -38,6 +58,8 @@ export default function AnnouncementsPage() {
             + New Announcement
           </button>
         </div>
+
+        {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
         {showForm && (
           <div className="bg-white rounded-xl shadow-sm p-6 mb-6">

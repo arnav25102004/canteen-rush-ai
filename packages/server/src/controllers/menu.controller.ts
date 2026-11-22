@@ -2,7 +2,10 @@ import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest, canteenScope } from '../middleware/auth';
 import { uploadImage, cloudinaryConfigured } from '../config/cloudinary';
-import { getCanteenMenuData, searchMenuByText } from '../services/menu.service';
+import { searchMenuByText } from '../services/menu.service';
+import { getCachedMenu, refreshMenu } from '../services/catalogCache.service';
+import { sendCachedJson } from '../config/cache';
+import { Prisma } from '@prisma/client';
 import { z } from 'zod';
 import fs from 'fs';
 
@@ -36,7 +39,9 @@ const menuItemSchema = z.object({
 export async function getCanteenMenu(req: Request, res: Response) {
   const { id: canteenId } = req.params;
   const { diet } = req.query; // "veg", "jain", "noegg"
-  return res.json(await getCanteenMenuData(canteenId, typeof diet === 'string' ? diet : null));
+  const menu = await getCachedMenu(canteenId, typeof diet === 'string' ? diet : null);
+  // Short shared TTL: a CDN may hold this briefly; orders always re-check price and stock in the DB.
+  return sendCachedJson(req, res, menu, 'public, max-age=0, s-maxage=5, stale-while-revalidate=10');
 }
 
 export async function searchMenuInCanteen(req: Request, res: Response) {
@@ -69,8 +74,7 @@ export async function searchMenuGlobal(req: AuthRequest, res: Response) {
 
   let institutionId: string | null | undefined;
   if (req.user) {
-    const me = await prisma.user.findUnique({ where: { id: req.user.id }, select: { institutionId: true } });
-    institutionId = me?.institutionId;
+    institutionId = req.user.institutionId;
   } else if (typeof req.query.institutionId === 'string') {
     institutionId = req.query.institutionId;
   }
@@ -105,6 +109,7 @@ export async function createCategory(req: AuthRequest, res: Response) {
   const category = await prisma.menuCategory.create({
     data: { canteenId, ...parse.data },
   });
+  await refreshMenu(canteenId, req.io);
   return res.status(201).json({ category });
 }
 
@@ -118,6 +123,7 @@ export async function updateCategory(req: AuthRequest, res: Response) {
   const { count } = await prisma.menuCategory.updateMany({ where: { id, ...scope }, data: parse.data });
   if (count === 0) return res.status(404).json(NOT_FOUND);
   const category = await prisma.menuCategory.findUnique({ where: { id } });
+  if (category) await refreshMenu(category.canteenId, req.io);
   return res.json({ category });
 }
 
@@ -125,8 +131,11 @@ export async function deleteCategory(req: AuthRequest, res: Response) {
   const { id } = req.params;
   const scope = canteenScope(req);
   if (!scope) return res.status(403).json(NO_CANTEEN);
+  const category = await prisma.menuCategory.findFirst({ where: { id, ...scope }, select: { canteenId: true } });
+  if (!category) return res.status(404).json(NOT_FOUND);
   const { count } = await prisma.menuCategory.deleteMany({ where: { id, ...scope } });
   if (count === 0) return res.status(404).json(NOT_FOUND);
+  await refreshMenu(category.canteenId, req.io);
   return res.json({ success: true });
 }
 
@@ -145,6 +154,7 @@ export async function createMenuItem(req: AuthRequest, res: Response) {
   const item = await prisma.menuItem.create({
     data: { canteenId, ...rest, customizations: customizations ?? [] },
   });
+  await refreshMenu(canteenId, req.io);
   return res.status(201).json({ item });
 }
 
@@ -169,6 +179,7 @@ export async function updateMenuItem(req: AuthRequest, res: Response) {
   }
 
   const item = await prisma.menuItem.update({ where: { id: existing.id }, data: parse.data });
+  await refreshMenu(existing.canteenId, req.io, { menuItemId: item.id });
   return res.json({ item });
 }
 
@@ -182,13 +193,8 @@ export async function toggleItemAvailability(req: AuthRequest, res: Response) {
     data: { isAvailable: !item.isAvailable },
   });
 
-  // Broadcast availability change to Socket.IO
-  if (req.io) {
-    req.io.to(`canteen:${item.canteenId}`).emit('item:availability', {
-      menuItemId: id,
-      isAvailable: updated.isAvailable,
-    });
-  }
+  // Write-through: the cache holds the new stock state before the vendor gets a response.
+  await refreshMenu(item.canteenId, req.io, { menuItemId: id, isAvailable: updated.isAvailable });
 
   return res.json({ item: updated });
 }
@@ -197,6 +203,7 @@ export async function deleteMenuItem(req: AuthRequest, res: Response) {
   const item = await findOwnItem(req, res);
   if (!item) return;
   await prisma.menuItem.delete({ where: { id: item.id } });
+  await refreshMenu(item.canteenId, req.io, { menuItemId: item.id });
   return res.json({ success: true });
 }
 
@@ -211,6 +218,7 @@ export async function uploadItemImage(req: AuthRequest, res: Response) {
     if (!existing) return;
     const imageUrl = await uploadImage(tmpPath, 'campus-khana/menu');
     const item = await prisma.menuItem.update({ where: { id: existing.id }, data: { imageUrl } });
+    await refreshMenu(existing.canteenId, req.io, { menuItemId: item.id });
     return res.json({ item });
   } finally {
     fs.promises.unlink(tmpPath).catch(() => {}); // multer temp file
@@ -239,8 +247,9 @@ export async function addFavorite(req: AuthRequest, res: Response) {
 
   try {
     await prisma.favorite.create({ data: { userId: req.user!.id, menuItemId } });
-  } catch {
-    // Already favorited (unique constraint) — treat as success
+  } catch (err) {
+    // Already favorited (unique constraint) is a success; anything else is a real failure.
+    if (!(err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002')) throw err;
   }
   return res.json({ success: true });
 }

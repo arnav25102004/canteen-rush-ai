@@ -22,6 +22,7 @@ export async function uploadImage(
 ): Promise<string> {
   const result = await cloudinary.uploader.upload(filePath, {
     folder,
+    timeout: 30_000,
     transformation: [{ quality: 'auto', fetch_format: 'auto' }],
   });
   return result.secure_url;
@@ -31,7 +32,7 @@ export async function uploadImage(
 export async function uploadBuffer(buf: Buffer, folder: string): Promise<{ url: string; publicId: string }> {
   return new Promise((resolve, reject) => {
     const stream = cloudinary.uploader.upload_stream(
-      { folder, resource_type: 'image', transformation: [{ quality: 'auto', fetch_format: 'auto' }] },
+      { folder, resource_type: 'image', timeout: 30_000, transformation: [{ quality: 'auto', fetch_format: 'auto' }] },
       (err, result) => (err || !result ? reject(err ?? new Error('Upload failed')) : resolve({ url: result.secure_url, publicId: result.public_id })),
     );
     stream.end(buf);

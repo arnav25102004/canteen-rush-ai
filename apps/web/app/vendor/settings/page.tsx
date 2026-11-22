@@ -18,6 +18,7 @@ export default function VendorSettingsPage() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState('');
+  const [loadFailed, setLoadFailed] = useState(false);
 
   useEffect(() => {
     api.get('/canteens/my')
@@ -28,7 +29,7 @@ export default function VendorSettingsPage() {
         closeTime: data.canteen.closingTime || '20:00',
         isOpen: data.canteen.isActive ?? true,
       }))
-      .catch(() => {})
+      .catch(() => setLoadFailed(true))
       .finally(() => setLoading(false));
   }, []);
 
@@ -59,6 +60,8 @@ export default function VendorSettingsPage() {
         <h1 className="text-2xl font-bold text-gray-800 mb-6">Canteen Settings</h1>
         {loading ? (
           <p className="text-gray-500">Loading...</p>
+        ) : loadFailed ? (
+          <p className="text-red-500">Could not load your canteen settings. Refresh the page to try again.</p>
         ) : (
           <form onSubmit={handleSave} className="max-w-lg space-y-5">
             <div>

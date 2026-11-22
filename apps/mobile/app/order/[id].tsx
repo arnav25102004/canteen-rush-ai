@@ -72,8 +72,8 @@ export default function OrderTrackingScreen() {
   useEffect(() => {
     if (!order) return;
     if (TERMINAL.includes(order.status)) return;
-    // Poll faster (3s) while PENDING, slow down to 10s after payment confirms
-    const interval = order.status === 'PENDING' ? 3000 : 10000;
+    // Poll faster (3s) while PENDING. After that the socket carries updates, so polling is only a safety net.
+    const interval = order.status === 'PENDING' ? 3000 : getSocket().connected ? 30000 : 10000;
     const timer = setInterval(load, interval);
     return () => clearInterval(timer);
   }, [order?.status, load]);

@@ -4,6 +4,8 @@ import { AuthRequest } from '../middleware/auth';
 import { validateBody } from '../utils/helpers';
 import { OrderStatus, Prisma } from '@prisma/client';
 import { FEATURES } from '../config/features';
+import { cached, sendCachedJson } from '../config/cache';
+import { CANTEEN_LIST_KEY, canteenKey, refreshCanteen } from '../services/catalogCache.service';
 import { z } from 'zod';
 
 const ACTIVE_STATUSES = [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING];
@@ -44,41 +46,51 @@ function toPublicCanteen<T extends { razorpayAccountId: string | null }>(c: T) {
 
 export async function listCanteens(req: Request, res: Response) {
   const { campus, includeInactive } = req.query;
-  const canteens = await prisma.canteen.findMany({
-    where: {
-      ...(includeInactive !== 'true' ? { isActive: true } : {}),
-      ...(campus ? { campus: { contains: campus as string, mode: 'insensitive' } } : {}),
-    },
-    select: PUBLIC_CANTEEN_SELECT,
-    orderBy: { name: 'asc' },
-  });
-  return res.json({ canteens: canteens.map(toPublicCanteen) });
+  const load = async () => {
+    const canteens = await prisma.canteen.findMany({
+      where: {
+        ...(includeInactive !== 'true' ? { isActive: true } : {}),
+        ...(campus ? { campus: { contains: campus as string, mode: 'insensitive' } } : {}),
+      },
+      select: PUBLIC_CANTEEN_SELECT,
+      orderBy: { name: 'asc' },
+    });
+    return { canteens: canteens.map(toPublicCanteen) };
+  };
+  // Only the default list is cached, so query strings can't create unlimited cache keys.
+  if (campus || includeInactive === 'true') return res.json(await load());
+  return sendCachedJson(req, res, await cached(CANTEEN_LIST_KEY, load, { ttl: 10, stale: 60 }), 'public, max-age=0, s-maxage=5, stale-while-revalidate=10');
 }
 
 export async function getCanteen(req: Request, res: Response) {
   const { id } = req.params;
-  const canteen = await prisma.canteen.findUnique({
-    where: { id },
-    select: PUBLIC_CANTEEN_SELECT,
-  });
-  if (!canteen) return res.status(404).json({ error: 'Canteen not found' });
-  return res.json({ canteen: toPublicCanteen(canteen) });
+  const body = await cached(canteenKey(id), async () => {
+    const canteen = await prisma.canteen.findUnique({ where: { id }, select: PUBLIC_CANTEEN_SELECT });
+    return canteen ? { canteen: toPublicCanteen(canteen) } : null;
+  }, { ttl: 10, stale: 60, cacheIf: (b) => !!b });
+  if (!body) return res.status(404).json({ error: 'Canteen not found' });
+  return sendCachedJson(req, res, body, 'public, max-age=0, s-maxage=5, stale-while-revalidate=10');
 }
 
 export async function getCanteenLiveStats(req: Request, res: Response) {
   const { id } = req.params;
 
-  const [activeOrders, canteen] = await Promise.all([
-    prisma.order.count({ where: { canteenId: id, status: { in: ACTIVE_STATUSES } } }),
-    prisma.canteen.findUnique({ where: { id }, select: { avgPrepTime: true } }),
-  ]);
-
-  return res.json({
-    canteenId: id,
-    activeOrders,
-    estimatedWaitMinutes: Math.ceil((activeOrders * (canteen?.avgPrepTime ?? 15)) / 3),
-    queueCount: activeOrders,
-  });
+  const stats = await cached(`canteen-live:${id}`, async () => {
+    const [activeOrders, canteen] = await Promise.all([
+      prisma.order.count({ where: { canteenId: id, status: { in: ACTIVE_STATUSES } } }),
+      prisma.canteen.findUnique({ where: { id }, select: { avgPrepTime: true } }),
+    ]);
+    return {
+      exists: !!canteen,
+      body: {
+        canteenId: id,
+        activeOrders,
+        estimatedWaitMinutes: Math.ceil((activeOrders * (canteen?.avgPrepTime ?? 15)) / 3),
+        queueCount: activeOrders,
+      },
+    };
+  }, { ttl: 5, stale: 15, cacheIf: (s) => s.exists });
+  return sendCachedJson(req, res, stats.body);
 }
 
 export async function createCanteen(req: AuthRequest, res: Response) {
@@ -86,6 +98,7 @@ export async function createCanteen(req: AuthRequest, res: Response) {
   if (!v.success) return;
 
   const canteen = await prisma.canteen.create({ data: v.data });
+  await refreshCanteen(canteen.id);
   return res.status(201).json({ canteen });
 }
 
@@ -95,6 +108,7 @@ export async function updateCanteen(req: AuthRequest, res: Response) {
   if (!v.success) return;
 
   const canteen = await prisma.canteen.update({ where: { id }, data: v.data });
+  await refreshCanteen(id);
   return res.json({ canteen });
 }
 
@@ -122,11 +136,13 @@ export async function updateMyCanteen(req: AuthRequest, res: Response) {
   if (!v.success) return;
 
   const updated = await prisma.canteen.update({ where: { id: canteen.id }, data: v.data });
+  await refreshCanteen(canteen.id);
   return res.json({ canteen: updated });
 }
 
 export async function deactivateCanteen(req: AuthRequest, res: Response) {
   const { id } = req.params;
   await prisma.canteen.update({ where: { id }, data: { isActive: false } });
+  await refreshCanteen(id);
   return res.json({ success: true });
 }

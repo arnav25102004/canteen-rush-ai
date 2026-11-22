@@ -1,8 +1,9 @@
 import { Request, Response, NextFunction } from 'express';
 import { verifyFirebaseToken } from '../config/firebase';
-import { prisma } from '../config/database';
 import { UserRole } from '@prisma/client';
 import { logger } from '../utils/logger';
+import { getAuthUser } from '../services/authUser.service';
+import { userApiLimiter } from './rateLimit';
 
 export interface AuthRequest extends Request {
   user?: {
@@ -35,10 +36,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     return res.status(401).json({ error: 'Invalid or expired token, or email not verified' });
   }
 
-  const user = await prisma.user.findUnique({
-    where: { firebaseUid: decoded.uid },
-    include: { vendorCanteen: { select: { id: true } } },
-  });
+  const user = await getAuthUser(decoded.uid);
 
   if (!user) {
     return res.status(401).json({ error: 'User not registered. Please register first.' });
@@ -63,7 +61,7 @@ export async function authenticate(req: AuthRequest, res: Response, next: NextFu
     institutionId: user.institutionId,
   };
 
-  next();
+  return userApiLimiter(req, res, next);
 }
 
 export function requireRole(...roles: UserRole[]) {
@@ -83,7 +81,7 @@ export const requireFeedbackAdmin = requireRole(UserRole.ADMIN, UserRole.SUPER_A
 export const requireCustomer = requireRole(UserRole.STUDENT, UserRole.FACULTY);
 
 // Attaches user if token present but does not reject unauthenticated requests
-export async function optionalAuthenticate(req: AuthRequest, res: Response, next: NextFunction) {
+export async function optionalAuthenticate(req: AuthRequest, _res: Response, next: NextFunction) {
   const authHeader = req.headers.authorization;
   if (!authHeader?.startsWith('Bearer ')) return next();
 
@@ -91,10 +89,7 @@ export async function optionalAuthenticate(req: AuthRequest, res: Response, next
   const decoded = await verifyFirebaseToken(token);
   if (!decoded) return next();
 
-  const user = await prisma.user.findUnique({
-    where: { firebaseUid: decoded.uid },
-    include: { vendorCanteen: { select: { id: true } } },
-  });
+  const user = await getAuthUser(decoded.uid);
   if (user && !user.isBanned && !user.isDeleted) {
     req.user = {
       id: user.id,

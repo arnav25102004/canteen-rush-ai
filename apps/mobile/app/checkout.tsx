@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { View, Text, ScrollView, TouchableOpacity, TextInput, StyleSheet, Alert, ActivityIndicator } from 'react-native';
 import { useRouter } from 'expo-router';
 import { isAxiosError } from 'axios';
@@ -13,6 +13,13 @@ const REDEMPTION_TIERS = [
   { points: 1000, discount: 120 },
 ];
 
+// Identifies one checkout attempt so a retried request cannot place a second order.
+const newRequestId = () =>
+  'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
+    const r = Math.floor(Math.random() * 16);
+    return (c === 'x' ? r : (r & 3) | 8).toString(16);
+  });
+
 export default function CheckoutScreen() {
   const router = useRouter();
   const { canteenId, canteenName, items, total, clear, slot, setSlot } = useCartStore();
@@ -21,20 +28,25 @@ export default function CheckoutScreen() {
   const [placing, setPlacing] = useState(false);
   const [loyaltyPoints, setLoyaltyPoints] = useState(0);
   const [selectedPointsTier, setSelectedPointsTier] = useState<number>(0);
+  const [walletBalance, setWalletBalance] = useState(0);
+  const [payOnline, setPayOnline] = useState(false);
+  const [expiredAttempts, setExpiredAttempts] = useState(0);
 
   const orderTotal = total();
   const pointsDiscount = REDEMPTION_TIERS.find(t => t.points === selectedPointsTier)?.discount || 0;
-  const afterPoints = orderTotal - pointsDiscount;
-  const amountDue = Math.max(0, afterPoints);
+  const afterPoints = Math.max(0, orderTotal - pointsDiscount);
+  // The server applies wallet credit automatically, so the amount shown must include it.
+  const walletApplied = Math.min(walletBalance, afterPoints);
+  const amountDue = afterPoints - walletApplied;
+  // A changed cart, slot or discount is a new order; an unchanged retry keeps the same id.
+  const attemptKey = JSON.stringify([canteenId, slot?.id, selectedPointsTier, items.map(i => [i.menuItemId, i.quantity]), expiredAttempts]);
+  const clientRequestId = useMemo(newRequestId, [attemptKey]);
 
-  useEffect(() => { loadLoyalty(); }, []);
-
-  async function loadLoyalty() {
-    try {
-      const loyaltyRes = await api.get('/loyalty').catch(() => ({ data: { account: { totalPoints: 0 } } }));
-      setLoyaltyPoints(loyaltyRes.data.account?.totalPoints || 0);
-    } catch { /* ignore */ }
-  }
+  useEffect(() => {
+    api.get('/loyalty').then(r => setLoyaltyPoints(r.data.account?.totalPoints || 0)).catch(() => null);
+    api.get('/wallet').then(r => setWalletBalance(Number(r.data.wallet?.balance ?? 0))).catch(() => null);
+    if (canteenId) api.get(`/canteens/${canteenId}`).then(r => setPayOnline(!!r.data.canteen?.onlinePaymentEnabled)).catch(() => null);
+  }, [canteenId]);
 
   async function handlePlaceOrder() {
     if (!canteenId) return;
@@ -47,12 +59,20 @@ export default function CheckoutScreen() {
         slotId: slot?.id,
         specialInstructions: specialInstructions.trim() || undefined,
         pointsToRedeem: selectedPointsTier || 0,
+        clientRequestId,
       });
 
       const orderId: string = data.order.id;
 
-      // Step 2a: Free order (points fully cover it) — go straight to tracking
-      if (amountDue === 0 || !data.razorpay) {
+      // A retry of an attempt that has since expired: keep the cart and start a new attempt.
+      if (['CANCELLED', 'NO_SHOW'].includes(data.order.status)) {
+        setExpiredAttempts((n) => n + 1);
+        Alert.alert('Order expired', 'Your previous attempt expired. Tap Place Order to try again.');
+        return;
+      }
+
+      // Step 2a: Nothing to pay online (counter, wallet or points) — go straight to tracking
+      if (!data.razorpay) {
         clear();
         router.replace({ pathname: '/order/[id]', params: { id: orderId } });
         return;
@@ -128,7 +148,8 @@ export default function CheckoutScreen() {
           <Text style={styles.sectionTitle}>Redeem Points</Text>
           <Text style={styles.pointsBalance}>You have {loyaltyPoints} points</Text>
           {REDEMPTION_TIERS.map(tier => {
-            const canRedeem = loyaltyPoints >= tier.points;
+            const hasPoints = loyaltyPoints >= tier.points;
+            const canRedeem = hasPoints && tier.discount <= orderTotal; // the server rejects a larger discount
             const isSelected = selectedPointsTier === tier.points;
             return (
               <TouchableOpacity
@@ -140,7 +161,7 @@ export default function CheckoutScreen() {
                   {canRedeem ? '✅' : '🔒'} {tier.points} pts → ₹{tier.discount} off
                 </Text>
                 {!canRedeem && (
-                  <Text style={styles.tierAway}>{tier.points - loyaltyPoints} away</Text>
+                  <Text style={styles.tierAway}>{hasPoints ? `Order ₹${tier.discount}+` : `${tier.points - loyaltyPoints} away`}</Text>
                 )}
               </TouchableOpacity>
             );
@@ -149,12 +170,18 @@ export default function CheckoutScreen() {
       )}
 
       {/* Discount summary */}
-      {pointsDiscount > 0 && (
+      {(pointsDiscount > 0 || walletApplied > 0) && (
         <View style={styles.card}>
           {pointsDiscount > 0 && (
             <View style={styles.row}>
               <Text style={styles.rowLabel}>Points discount ({selectedPointsTier} pts)</Text>
               <Text style={[styles.rowValue, { color: '#10b981' }]}>−₹{pointsDiscount}</Text>
+            </View>
+          )}
+          {walletApplied > 0 && (
+            <View style={styles.row}>
+              <Text style={styles.rowLabel}>Wallet credit</Text>
+              <Text style={[styles.rowValue, { color: '#10b981' }]}>−₹{walletApplied.toFixed(0)}</Text>
             </View>
           )}
           <View style={[styles.row, styles.totalRow]}>
@@ -183,11 +210,13 @@ export default function CheckoutScreen() {
       {/* Payment info */}
       {amountDue > 0 ? (
         <View style={styles.payCard}>
-          <Text style={styles.payIcon}>💵</Text>
+          <Text style={styles.payIcon}>{payOnline ? '💳' : '💵'}</Text>
           <View style={{ flex: 1 }}>
-            <Text style={styles.payTitle}>Pay at Counter</Text>
+            <Text style={styles.payTitle}>{payOnline ? 'Pay Online' : 'Pay at Counter'}</Text>
             <Text style={styles.paySubtitle}>
-              Show your pickup code and pay ₹{amountDue.toFixed(0)} in cash when you collect.
+              {payOnline
+                ? `Pay ₹${amountDue.toFixed(0)} securely on the next step.`
+                : `Show your pickup code and pay ₹${amountDue.toFixed(0)} in cash when you collect.`}
             </Text>
           </View>
         </View>
@@ -195,7 +224,7 @@ export default function CheckoutScreen() {
         <View style={[styles.payCard, { backgroundColor: '#f0fdf4', borderColor: '#bbf7d0' }]}>
           <Text style={styles.payIcon}>✅</Text>
           <View style={{ flex: 1 }}>
-            <Text style={[styles.payTitle, { color: '#15803d' }]}>Fully covered by points</Text>
+            <Text style={[styles.payTitle, { color: '#15803d' }]}>Fully covered by wallet and points</Text>
             <Text style={[styles.paySubtitle, { color: '#166534' }]}>No payment needed</Text>
           </View>
         </View>
@@ -210,7 +239,7 @@ export default function CheckoutScreen() {
         {placing
           ? <ActivityIndicator color="#fff" />
           : <Text style={styles.placeBtnText}>
-              {amountDue > 0 ? `Place Order — Pay ₹${amountDue.toFixed(0)} at Counter` : 'Place Order — Free'}
+              {amountDue > 0 ? `Place Order — Pay ₹${amountDue.toFixed(0)}${payOnline ? '' : ' at Counter'}` : 'Place Order — Nothing to Pay'}
             </Text>}
       </TouchableOpacity>
     </ScrollView>

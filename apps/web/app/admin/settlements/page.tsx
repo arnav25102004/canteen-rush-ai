@@ -18,7 +18,10 @@ interface Settlement {
 }
 
 export default function SettlementsPage() {
-  const [date, setDate] = useState(new Date().toISOString().slice(0, 10));
+  const [date, setDate] = useState(() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  });
   const [settlements, setSettlements] = useState<Settlement[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -58,7 +61,12 @@ export default function SettlementsPage() {
         s.isPaid ? 'Paid' : 'Pending',
       ]),
     ];
-    const csv = rows.map(r => r.join(',')).join('\n');
+    // Quote every cell, and stop spreadsheet apps from running a name as a formula.
+    const cell = (v: string | number) => {
+      const text = String(v);
+      return `"${(/^[=+\-@\t\r]/.test(text) ? `'${text}` : text).replace(/"/g, '""')}"`;
+    };
+    const csv = rows.map(r => r.map(cell).join(',')).join('\n');
     const blob = new Blob([csv], { type: 'text/csv' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');

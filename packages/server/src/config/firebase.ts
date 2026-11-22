@@ -1,7 +1,9 @@
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { logger } from '../utils/logger';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { getMessaging } from 'firebase-admin/messaging';
 import path from 'path';
+import { withTimeout } from '../middleware/resilience';
 
 if (!getApps().length) {
   let initialized = false;
@@ -11,7 +13,7 @@ if (!getApps().length) {
     const serviceAccount = require(path.resolve(__dirname, '../../firebase-service-account.json'));
     initializeApp({ credential: cert(serviceAccount) });
     initialized = true;
-    console.log('Firebase Admin initialized via JSON file ✅');
+    logger.info('Firebase Admin initialized via JSON file ✅');
   } catch {}
 
   // Try 2: Environment variables (production)
@@ -33,14 +35,14 @@ if (!getApps().length) {
         }),
       });
       initialized = true;
-      console.log('Firebase Admin initialized via env vars ✅');
+      logger.info('Firebase Admin initialized via env vars ✅');
     } catch (err) {
-      console.warn('Firebase env var init failed:', (err as Error).message);
+      logger.warn('Firebase env var init failed', { error: (err as Error).message });
     }
   }
 
   if (!initialized) {
-    console.warn('Firebase not configured — all real tokens will be rejected');
+    logger.warn('Firebase not configured — all real tokens will be rejected');
   }
 }
 
@@ -87,10 +89,10 @@ export async function sendPushNotification(
 ): Promise<boolean> {
   try {
     if (!getApps().length) return false;
-    await getMessaging().send({ token: fcmToken, notification: { title, body }, data });
+    await withTimeout(getMessaging().send({ token: fcmToken, notification: { title, body }, data }), 5_000, 'FCM send');
     return true;
   } catch (err) {
-    console.error('FCM send error:', err);
+    logger.error('FCM send error', { error: (err as Error)?.message });
     return false;
   }
 }

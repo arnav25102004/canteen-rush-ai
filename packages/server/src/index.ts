@@ -4,12 +4,16 @@ import http from 'http';
 import cors from 'cors';
 import helmet from 'helmet';
 import compression from 'compression';
-import morgan from 'morgan';
 import type { ScheduledTask } from 'node-cron';
 import { Server as SocketIOServer } from 'socket.io';
 
 import { prisma } from './config/database';
 import { redis, redisEnabled } from './config/redis';
+import { createAdapter } from '@socket.io/redis-adapter';
+import { startCacheSync, stopCacheSync } from './config/cache';
+import { observe, requestDeadline, shedLoad } from './middleware/resilience';
+import { metrics } from './utils/metrics';
+import { startOutboxWorker } from './services/outbox.service';
 import { cloudinaryConfigured } from './config/cloudinary';
 import { setupSocketIO } from './socket/orderSocket';
 import { logger } from './utils/logger';
@@ -52,9 +56,26 @@ const server = http.createServer(app);
 // Render (and any reverse proxy) forwards the client IP in X-Forwarded-For.
 // Without this, req.ip is the proxy's address for every request, which
 // collapses all per-IP rate limiting into one shared bucket and makes the
-// abuse logs useless. Trust exactly one hop — trusting all hops would let a
-// client spoof X-Forwarded-For and bypass the limiter entirely.
-app.set('trust proxy', 1);
+// abuse logs useless. Trust exactly the known hops (1 for Render; set
+// TRUST_PROXY_HOPS=2 behind a CDN) — trusting all hops would let a client spoof
+// X-Forwarded-For and bypass the limiter entirely.
+app.set('trust proxy', Number(process.env.TRUST_PROXY_HOPS) || 1);
+
+// api = HTTP + sockets, worker = queue + cron, all = both (single-instance deploys).
+const ROLE = process.env.PROCESS_ROLE === 'api' || process.env.PROCESS_ROLE === 'worker' ? process.env.PROCESS_ROLE : 'all';
+const runsApi = ROLE !== 'worker';
+const runsJobs = ROLE !== 'api';
+
+// ── API versioning ────────────────────────────────────────────────────────────
+// /api/v1/* is the stable contract. Unversioned /api/* stays as an alias so app
+// versions already installed on phones keep working.
+app.use((req, res, next) => {
+  if (req.url === '/api/v1' || req.url.startsWith('/api/v1/') || req.url.startsWith('/api/v1?')) {
+    req.url = `/api${req.url.slice('/api/v1'.length)}`;
+  }
+  res.setHeader('API-Version', '1');
+  next();
+});
 
 // ── CORS ──────────────────────────────────────────────────────────────────────
 const allowedOrigins = parseOrigins();
@@ -68,7 +89,14 @@ const io = new SocketIOServer(server, {
     origin: checkOrigin,
     credentials: true,
   },
+  maxHttpBufferSize: 16 * 1024, // clients only send small room-join events
+  connectTimeout: 10_000,
 });
+
+// Slow-client protection (slowloris) and keep-alive longer than typical proxies.
+server.requestTimeout = 30_000;
+server.headersTimeout = 15_000;
+server.keepAliveTimeout = 65_000;
 
 // ── Security headers ──────────────────────────────────────────────────────────
 app.use(helmet({
@@ -111,24 +139,32 @@ app.get('/ready', async (_req, res) => {
   }
 });
 
+app.get('/metrics', (req, res) => {
+  const token = process.env.METRICS_TOKEN;
+  if (!token || req.headers.authorization !== `Bearer ${token}`) return res.status(404).end();
+  res.type('text/plain').send(metrics.render());
+});
+
 // ── Rate limiting ─────────────────────────────────────────────────────────────
 // Per-user limits on the expensive paths live next to their routes; see
 // middleware/rateLimit.ts for why IP-keyed limits are coarse here.
+app.use(observe);
+app.use(shedLoad);
+app.use(requestDeadline);
 app.use(globalLimiter);
 app.use('/api/auth', authLimiter);
 app.use('/api/auth/forgot-password', forgotPasswordLimiter);
 
 // ── Body parsing ──────────────────────────────────────────────────────────────
 app.use(compression());
-app.use(morgan('dev'));
 app.use(express.json({
   limit: '100kb',
   verify: (req: any, _res, buf) => {
     // rawBody needed by Razorpay webhook for HMAC signature verification
-    req.rawBody = buf;
+    if (/^\/api(\/v1)?\/payments\/webhook/.test(req.originalUrl)) req.rawBody = buf;
   },
 }));
-app.use(express.urlencoded({ extended: true }));
+app.use(express.urlencoded({ extended: true, limit: '100kb', parameterLimit: 100 }));
 
 // Attach io to requests
 app.use((req: any, _res, next) => {
@@ -145,7 +181,6 @@ app.use('/api/vendor', menuRoutes);
 app.use('/api/slots', slotRoutes);
 app.use('/api/vendor/slots', slotRoutes);
 app.use('/api/orders', orderRoutes);
-app.use('/api/vendor/orders', orderRoutes);
 app.use('/api/wallet', walletRoutes);
 app.use('/api/payments', paymentRoutes);
 app.use('/api/notifications', notificationRoutes);
@@ -156,7 +191,6 @@ app.use('/api/admin/changelog', changelogAdminRoutes);
 app.use('/api/vendor/feedback', feedbackVendorRoutes);
 app.use('/api/admin', adminRoutes);
 app.use('/api/analytics', analyticsRoutes);
-app.use('/api/vendor/analytics', analyticsRoutes);
 app.use('/api/institutions', institutionRoutes);
 app.use('/api/loyalty', loyaltyRoutes);
 app.use('/api/feedback', feedbackRoutes);
@@ -171,6 +205,8 @@ app.use(globalErrorHandler);
 const PORT = parseInt(process.env.PORT || '3001', 10);
 
 const cronTasks: ScheduledTask[] = [];
+let stopOutbox: (() => Promise<void>) | null = null;
+const socketRedis: Array<typeof redis> = [];
 
 async function bootstrap() {
   try {
@@ -194,17 +230,34 @@ async function bootstrap() {
     } catch (err) {
       logger.warn('Redis unavailable — running without the slot availability cache (will keep retrying)');
     }
+    if (runsApi && redis.status === 'ready') {
+      // Delivers room events across instances. Without it, a single instance still works.
+      const pub = redis.duplicate({ commandTimeout: undefined });
+      const sub = redis.duplicate({ commandTimeout: undefined });
+      pub.on('error', () => {});
+      sub.on('error', () => {});
+      io.adapter(createAdapter(pub, sub));
+      socketRedis.push(pub, sub);
+    }
   }
+  await startCacheSync();
 
   // Start background jobs
   if (FEATURES.RAZORPAY_ENABLED) {
     logger.warn('RAZORPAY_ENABLED=true: cancel/no-show refunds are credited to the student wallet and do NOT reverse Razorpay Route transfers or refund the card. Reconcile vendor payouts manually.');
   }
-  cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob(), startFeedbackNudgeJob(), startFeedbackSlaJob(), startFeedbackRetentionJob());
+  if (runsJobs) {
+    cronTasks.push(startSlotGenerationJob(), startAutoCancelJob(), startAssistantRetentionJob(), startFeedbackNudgeJob(), startFeedbackSlaJob(), startFeedbackRetentionJob());
+    stopOutbox = startOutboxWorker();
+  }
 
-  server.listen(PORT, () => {
-    logger.info(`Server running on http://localhost:${PORT}`);
-  });
+  if (runsApi) {
+    server.listen(PORT, () => {
+      logger.info(`Server running on http://localhost:${PORT} (role: ${ROLE})`);
+    });
+  } else {
+    logger.info('Worker running');
+  }
 }
 
 // Last line of defence for stray promise rejections (cron jobs, fire-and-forget
@@ -230,6 +283,9 @@ async function shutdown(signal: string, exitCode: number) {
     if (server.listening) await new Promise<void>((resolve) => server.close(() => resolve()));
     logger.info('HTTP and Socket.IO servers closed');
   } catch (err) { logger.warn('Server close failed', { err }); }
+  try { await stopOutbox?.(); } catch (err) { logger.warn('Outbox stop failed', { err }); }
+  await stopCacheSync();
+  for (const r of socketRedis) r.disconnect();
   for (const task of cronTasks) {
     try { await task.stop(); } catch (err) { logger.warn('Cron stop failed', { err }); }
   }

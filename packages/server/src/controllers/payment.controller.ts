@@ -1,7 +1,8 @@
 import { Request, Response } from 'express';
+import { logger } from '../utils/logger';
 import crypto from 'crypto';
 import { prisma } from '../config/database';
-import { sendOrderNotification } from '../services/notification.service';
+import { enqueue } from '../services/outbox.service';
 import { generatePickupCode } from '../utils/helpers';
 import { OrderStatus, Prisma } from '@prisma/client';
 
@@ -21,7 +22,7 @@ interface RawRequest extends Request {
 export async function razorpayWebhook(req: RawRequest, res: Response) {
   const webhookSecret = process.env.RAZORPAY_WEBHOOK_SECRET;
   if (!webhookSecret) {
-    console.error('[Webhook] RAZORPAY_WEBHOOK_SECRET not set');
+    logger.error('[Webhook] RAZORPAY_WEBHOOK_SECRET not set');
     return res.status(500).json({ error: 'Webhook secret not configured' });
   }
 
@@ -42,7 +43,7 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
     crypto.timingSafeEqual(sigBuf, expectedBuf);
 
   if (!signatureValid) {
-    console.warn('[Webhook] Invalid Razorpay signature');
+    logger.warn('[Webhook] Invalid Razorpay signature');
     return res.status(400).json({ error: 'Invalid webhook signature' });
   }
 
@@ -51,7 +52,7 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
     payload: { payment: { entity: RazorpayPaymentEntity } };
   };
 
-  console.log(`[Webhook] Razorpay event: ${event}`);
+  logger.info(`[Webhook] Razorpay event: ${event}`);
 
   const entity = payload?.payment?.entity;
   if (!entity) return res.json({ status: 'ok' });
@@ -71,7 +72,7 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
 
     // 200, not 404: Razorpay retries non-2xx responses for days.
     if (!order) {
-      console.warn(`[Webhook] Order not found for razorpayOrderId: ${razorpayOrderId} (payment ${razorpayPaymentId})`);
+      logger.warn(`[Webhook] Order not found for razorpayOrderId: ${razorpayOrderId} (payment ${razorpayPaymentId})`);
       return res.json({ status: 'ok' });
     }
 
@@ -79,7 +80,7 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
     const amountOk = entity.amount === expectedPaise && entity.currency === 'INR';
 
     if (!amountOk) {
-      console.error(
+      logger.error(
         `[Webhook] Amount mismatch for order ${order.id}: expected ${expectedPaise} INR paise, ` +
         `captured ${entity.amount} ${entity.currency} (payment ${razorpayPaymentId}). Not confirming; crediting wallet.`
       );
@@ -90,16 +91,25 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
     const pickupCode = generatePickupCode();
 
     // Conditional update = idempotent: Razorpay retries webhooks.
-    const { count } = await prisma.order.updateMany({
-      where: { id: order.id, status: OrderStatus.PENDING, paymentStatus: 'AWAITING_PAYMENT' },
-      data: {
-        status: OrderStatus.CONFIRMED,
-        paymentStatus: 'PAID',
-        razorpayPaymentId,
-        razorpayTransferId: transferId,
-        pickupCode,
-        paymentVerifiedAt: new Date(),
-      },
+    const count = await prisma.$transaction(async (tx) => {
+      const result = await tx.order.updateMany({
+        where: { id: order.id, status: OrderStatus.PENDING, paymentStatus: 'AWAITING_PAYMENT' },
+        data: {
+          status: OrderStatus.CONFIRMED,
+          paymentStatus: 'PAID',
+          razorpayPaymentId,
+          razorpayTransferId: transferId,
+          pickupCode,
+          paymentVerifiedAt: new Date(),
+        },
+      });
+      if (result.count === 1 && order.userId) {
+        await enqueue(tx, {
+          type: 'notification.order',
+          payload: { userId: order.userId, orderId: order.id, orderNumber: order.orderNumber, status: OrderStatus.CONFIRMED },
+        });
+      }
+      return result.count;
     });
 
     if (count === 0) {
@@ -127,14 +137,13 @@ export async function razorpayWebhook(req: RawRequest, res: Response) {
       pickupCode,
     });
 
-    if (order.userId) await sendOrderNotification(order.userId, order.id, order.orderNumber, OrderStatus.CONFIRMED);
-    console.log(`[Webhook] Order ${order.orderNumber} confirmed`);
+    logger.info(`[Webhook] Order ${order.orderNumber} confirmed`);
   }
 
   if (event === 'payment.failed') {
     // Razorpay lets the student retry on the same order, so a failed attempt must
     // not cancel it; the auto-cancel cron expires orders that never get paid.
-    console.log(`[Webhook] Payment failed for razorpay order ${entity.order_id} (payment ${entity.id})`);
+    logger.info(`[Webhook] Payment failed for razorpay order ${entity.order_id} (payment ${entity.id})`);
   }
 
   return res.json({ status: 'ok' });
@@ -153,7 +162,7 @@ async function creditCapturedPayment(
   reason: string
 ) {
   if (!order.userId) {
-    console.error(`[Webhook] Cannot credit payment ${razorpayPaymentId}: order ${order.id} has no user`);
+    logger.error(`[Webhook] Cannot credit payment ${razorpayPaymentId}: order ${order.id} has no user`);
     return;
   }
   const userId = order.userId;
@@ -176,10 +185,10 @@ async function creditCapturedPayment(
         },
       });
     });
-    console.log(`[Webhook] Credited ${amount} to wallet for payment ${razorpayPaymentId} (order ${order.id})`);
+    logger.info(`[Webhook] Credited ${amount} to wallet for payment ${razorpayPaymentId} (order ${order.id})`);
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      console.log(`[Webhook] Payment ${razorpayPaymentId} already credited; ignoring duplicate`);
+      logger.info(`[Webhook] Payment ${razorpayPaymentId} already credited; ignoring duplicate`);
       return;
     }
     throw err;

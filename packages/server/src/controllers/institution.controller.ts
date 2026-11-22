@@ -1,8 +1,9 @@
 import { Request, Response } from 'express';
+import { OrderStatus } from '@prisma/client';
 import { prisma } from '../config/database';
 import { getMoodsForCanteens } from '../services/feedbackMood.service';
 
-export async function listInstitutions(req: Request, res: Response) {
+export async function listInstitutions(_req: Request, res: Response) {
   const institutions = await prisma.institution.findMany({
     where: { isActive: true },
     select: { id: true, name: true, slug: true, emailDomain: true, logoUrl: true, city: true },
@@ -25,7 +26,7 @@ export async function getInstitutionCanteens(req: Request, res: Response) {
       id: true, name: true, description: true, campus: true, location: true,
       imageUrl: true, bannerUrl: true, openingTime: true, closingTime: true,
       avgPrepTime: true, contactPhone: true, isActive: true,
-      _count: { select: { orders: true } },
+      _count: { select: { orders: { where: { status: { in: [OrderStatus.CONFIRMED, OrderStatus.ACCEPTED, OrderStatus.PREPARING] } } } } },
     },
     orderBy: { name: 'asc' },
   });

@@ -4,11 +4,13 @@ import Sidebar from '../../../components/shared/Sidebar';
 import api from '../../../lib/api';
 
 const ROLES = ['STUDENT', 'FACULTY', 'VENDOR', 'ADMIN'];
+const PAGE_SIZE = 100;
 const ROLE_COLORS: Record<string, string> = {
   STUDENT: 'bg-blue-100 text-blue-700',
   FACULTY: 'bg-amber-100 text-amber-700',
   VENDOR: 'bg-purple-100 text-purple-700',
   ADMIN: 'bg-red-100 text-red-700',
+  SUPER_ADMIN: 'bg-gray-800 text-white',
 };
 
 export default function UsersPage() {
@@ -16,22 +18,32 @@ export default function UsersPage() {
   const [total, setTotal] = useState(0);
   const [roleFilter, setRoleFilter] = useState('');
   const [search, setSearch] = useState('');
+  const [query, setQuery] = useState('');
+  const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   useEffect(() => {
+    const t = setTimeout(() => setQuery(search.trim()), 300);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
     loadUsers();
-  }, [roleFilter]);
+  }, [roleFilter, query]);
 
   async function loadUsers() {
     setLoading(true);
     try {
-      const params = roleFilter ? `?role=${roleFilter}` : '';
-      const { data } = await api.get(`/admin/users${params}`);
+      const params = new URLSearchParams({ limit: String(PAGE_SIZE) });
+      if (roleFilter) params.set('role', roleFilter);
+      if (query) params.set('q', query);
+      const { data } = await api.get(`/admin/users?${params}`);
       setUsers(data.users || []);
       setTotal(data.total || 0);
-    } catch (e: any) {
-      console.error(e);
+      setError('');
+    } catch {
+      setError('Could not load users.');
     } finally {
       setLoading(false);
     }
@@ -49,10 +61,6 @@ export default function UsersPage() {
     }
   }
 
-  const filtered = search
-    ? users.filter(u => u.name.toLowerCase().includes(search.toLowerCase()) || u.email.toLowerCase().includes(search.toLowerCase()))
-    : users;
-
   return (
     <div className="flex min-h-screen">
       <Sidebar />
@@ -65,15 +73,17 @@ export default function UsersPage() {
           <select value={roleFilter} onChange={e => setRoleFilter(e.target.value)}
             className="border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-400">
             <option value="">All Roles</option>
-            {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+            {[...ROLES, 'SUPER_ADMIN'].map(r => <option key={r} value={r}>{r}</option>)}
           </select>
-          <span className="text-sm text-gray-500">{total} users</span>
+          <span className="text-sm text-gray-500">{users.length < total ? `Showing ${users.length} of ${total}. Search to narrow.` : `${total} users`}</span>
         </div>
+
+        {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
         <div className="bg-white rounded-xl shadow-sm overflow-hidden">
           {loading ? (
             <div className="p-8 text-center text-gray-400">Loading…</div>
-          ) : filtered.length === 0 ? (
+          ) : users.length === 0 ? (
             <div className="p-8 text-center text-gray-400">No users found</div>
           ) : (
             <table className="w-full text-sm">
@@ -87,7 +97,7 @@ export default function UsersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {filtered.map(u => (
+                {users.map(u => (
                   <tr key={u.id} className="hover:bg-gray-50">
                     <td className="px-6 py-4">
                       <p className="font-medium text-gray-800">{u.name}</p>
@@ -97,14 +107,18 @@ export default function UsersPage() {
                     <td className="px-6 py-4 text-gray-600">{u.campus || '—'}</td>
                     <td className="px-6 py-4 text-gray-500">{new Date(u.createdAt).toLocaleDateString()}</td>
                     <td className="px-6 py-4">
-                      <select
-                        value={u.role}
-                        onChange={e => changeRole(u.id, e.target.value)}
-                        disabled={updatingId === u.id}
-                        className={`text-xs font-semibold px-2 py-1 rounded-full border-0 cursor-pointer ${ROLE_COLORS[u.role] || 'bg-gray-100 text-gray-700'}`}
-                      >
-                        {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
-                      </select>
+                      {u.role === 'SUPER_ADMIN' ? (
+                        <span className={`text-xs font-semibold px-2 py-1 rounded-full ${ROLE_COLORS.SUPER_ADMIN}`}>SUPER_ADMIN</span>
+                      ) : (
+                        <select
+                          value={u.role}
+                          onChange={e => changeRole(u.id, e.target.value)}
+                          disabled={updatingId === u.id}
+                          className={`text-xs font-semibold px-2 py-1 rounded-full border-0 cursor-pointer ${ROLE_COLORS[u.role] || 'bg-gray-100 text-gray-700'}`}
+                        >
+                          {ROLES.map(r => <option key={r} value={r}>{r}</option>)}
+                        </select>
+                      )}
                     </td>
                   </tr>
                 ))}

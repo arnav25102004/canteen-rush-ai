@@ -6,7 +6,7 @@ vi.mock('../utils/logger', () => ({
   logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() },
 }));
 
-import { globalLimiter, authLimiter, placeOrderLimiter } from './rateLimit';
+import { globalLimiter, forgotPasswordLimiter, placeOrderLimiter, ipKey } from './rateLimit';
 import type { AuthRequest } from './auth';
 
 function appWith(limiter: express.RequestHandler, injectUser?: string) {
@@ -30,11 +30,21 @@ describe('globalLimiter', () => {
   });
 });
 
-describe('authLimiter', () => {
+describe('ipKey', () => {
+  it('groups IPv6 by /64, since one hotspot controls the whole block', () => {
+    expect(ipKey('2401:4900:1c00:aa01::1')).toBe(ipKey('2401:4900:1c00:aa01:ffff:1:2:3'));
+    expect(ipKey('2401:4900:1c00:aa01::1')).not.toBe(ipKey('2401:4900:1c00:aa02::1'));
+  });
+  it('keeps IPv4 and unwraps mapped addresses', () => {
+    expect(ipKey('::ffff:10.1.2.3')).toBe('10.1.2.3');
+  });
+});
+
+describe('forgotPasswordLimiter', () => {
   it('rejects with 429 once the per-IP ceiling for credential endpoints is exceeded', async () => {
-    const app = appWith(authLimiter);
+    const app = appWith(forgotPasswordLimiter);
     let last;
-    for (let i = 0; i < 101; i++) {
+    for (let i = 0; i < 21; i++) {
       last = await request(app).get('/');
     }
     expect(last!.status).toBe(429);

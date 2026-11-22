@@ -2,7 +2,9 @@
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { useEffect, useState } from 'react';
+import { signOut } from 'firebase/auth';
 import api from '../../lib/api';
+import { auth } from '../../lib/firebase';
 
 const vendorLinks = [
   { href: '/vendor/dashboard', label: 'Dashboard', icon: '📊' },
@@ -50,7 +52,9 @@ export default function Sidebar() {
 
   const links = role === 'ADMIN' ? adminLinks : vendorLinks;
 
-  function logout() {
+  async function logout() {
+    // Without this Firebase keeps the session and the next request is signed in again.
+    if (auth) await signOut(auth).catch(() => undefined);
     localStorage.clear();
     router.push('/login');
   }

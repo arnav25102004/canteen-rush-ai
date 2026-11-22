@@ -45,7 +45,7 @@ export default function ProfileScreen() {
               await api.delete('/user/account');
               await logout();
               router.replace('/(auth)/login');
-            } catch (err) {
+            } catch {
               Alert.alert('Error', 'Failed to delete account. Please try again.');
             }
           },

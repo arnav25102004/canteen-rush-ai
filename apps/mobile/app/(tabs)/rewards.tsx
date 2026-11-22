@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { View, Text, FlatList, StyleSheet, ActivityIndicator, TouchableOpacity } from 'react-native';
+import { View, Text, FlatList, StyleSheet, ActivityIndicator } from 'react-native';
 import api from '../../services/api';
 import { getFeedbackStreak, FeedbackStreak } from '../../services/feedback';
 import { t } from '../../components/feedback/copy';

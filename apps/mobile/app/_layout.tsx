@@ -60,7 +60,7 @@ export default function RootLayout() {
   const checkServer = useCallback(async () => {
     setServerError(false);
     try {
-      await axios.get(`${CONFIG.API_URL.replace('/api', '')}/api/health`, { timeout: 15000 });
+      await axios.get(`${CONFIG.API_URL.replace(/\/api$/, '')}/api/health`, { timeout: 15000 });
       setServerReady(true);
     } catch {
       setServerError(true);

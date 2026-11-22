@@ -1,4 +1,5 @@
 import cron, { ScheduledTask } from 'node-cron';
+import { logger } from '../utils/logger';
 import { withAdvisoryLock, LOCK_KEYS } from '../utils/advisoryLock';
 import { runRetention, reconcileAggregates } from '../services/feedbackRetention.service';
 
@@ -15,12 +16,12 @@ export function startFeedbackRetentionJob(): ScheduledTask {
         await reconcileAggregates();
       });
     } catch (err: any) {
-      console.error('[Cron] Feedback retention job error:', err.message);
+      logger.error('[Cron] Feedback retention job error', { error: err.message });
     } finally {
       running = false;
     }
   });
 
-  console.log('[Cron] Feedback retention + reconcile job scheduled (daily 21:00 UTC)');
+  logger.info('[Cron] Feedback retention + reconcile job scheduled (daily 21:00 UTC)');
   return task;
 }

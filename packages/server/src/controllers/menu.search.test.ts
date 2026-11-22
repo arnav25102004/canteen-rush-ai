@@ -8,7 +8,7 @@ vi.mock('../config/database', () => ({
 
 import { searchMenuGlobal } from './menu.controller';
 
-function run(query: Record<string, unknown>, user?: { id: string }) {
+function run(query: Record<string, unknown>, user?: { id: string; institutionId?: string }) {
   const res: any = { statusCode: 200, body: undefined };
   res.status = (c: number) => ((res.statusCode = c), res);
   res.json = (b: unknown) => ((res.body = b), res);
@@ -22,8 +22,7 @@ describe('searchMenuGlobal', () => {
   });
 
   it('scopes to the logged-in user institution, active canteens and available items', async () => {
-    userFind.mockResolvedValue({ institutionId: 'inst-1' });
-    const res = await run({ q: 'puff', institutionId: 'ignored' }, { id: 'u1' });
+    const res = await run({ q: 'puff', institutionId: 'ignored' }, { id: 'u1', institutionId: 'inst-1' });
     expect(res.statusCode).toBe(200);
     const where = findMany.mock.calls[0][0].where;
     expect(where.isAvailable).toBe(true);

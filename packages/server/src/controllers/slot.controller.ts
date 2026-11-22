@@ -1,9 +1,9 @@
 import { Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest, canteenScope } from '../middleware/auth';
-import { cacheDel, slotCacheKeys } from '../config/redis';
-import { getSlotAvailability, generateSlotsForCanteen, listSlotsWithAvailability } from '../services/slot.service';
-import { istDateKey, istDayString, slotStartsAt, SLOT_CUTOFF_MS, validateBody } from '../utils/helpers';
+import { invalidateSlots } from '../services/catalogCache.service';
+import { generateSlotsForCanteen, listSlotsWithAvailability } from '../services/slot.service';
+import { istDayString, validateBody } from '../utils/helpers';
 import { z } from 'zod';
 
 const MAX_SLOT_RANGE_DAYS = 31;
@@ -67,8 +67,9 @@ export async function updateSlot(req: AuthRequest, res: Response) {
 
   const { count } = await prisma.pickupSlot.updateMany({ where: { id, ...scope }, data: v.data });
   if (count === 0) return res.status(404).json({ error: 'Slot not found' });
-  await cacheDel(...slotCacheKeys(id));
-  return res.json({ slot: await prisma.pickupSlot.findUnique({ where: { id } }) });
+  const slot = await prisma.pickupSlot.findUnique({ where: { id } });
+  if (slot) await invalidateSlots(slot.canteenId, slot.date);
+  return res.json({ slot });
 }
 
 export async function toggleSlot(req: AuthRequest, res: Response) {
@@ -79,6 +80,6 @@ export async function toggleSlot(req: AuthRequest, res: Response) {
   if (!slot) return res.status(404).json({ error: 'Slot not found' });
 
   const updated = await prisma.pickupSlot.update({ where: { id }, data: { isOpen: !slot.isOpen } });
-  await cacheDel(...slotCacheKeys(id));
+  await invalidateSlots(updated.canteenId, updated.date);
   return res.json({ slot: updated });
 }

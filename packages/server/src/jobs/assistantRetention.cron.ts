@@ -44,6 +44,6 @@ export function startAssistantRetentionJob(): ScheduledTask {
     }
   }, { timezone: 'Asia/Kolkata' });
 
-  console.log('[Cron] Assistant retention job scheduled (daily 03:30 IST)');
+  logger.info('[Cron] Assistant retention job scheduled (daily 03:30 IST)');
   return task;
 }

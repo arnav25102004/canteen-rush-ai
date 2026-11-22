@@ -9,7 +9,7 @@ vi.mock('../config/database', () => ({ prisma: { user: { findUnique } } }));
 
 vi.mock('../utils/logger', () => ({ logger: { warn: vi.fn(), error: vi.fn(), info: vi.fn() } }));
 
-import { authenticateSocket } from './orderSocket';
+import { authenticateSocket, setupSocketIO } from './orderSocket';
 
 function fakeSocket(token?: string): Socket {
   return {
@@ -80,5 +80,33 @@ describe('authenticateSocket (handshake middleware)', () => {
     const next = vi.fn();
     await authenticateSocket(fakeSocket('good-token'), next);
     expect(next.mock.calls[0][0].message).toMatch(/Authentication failed/);
+  });
+});
+
+describe('socket event payloads', () => {
+  it('ignores missing or malformed payloads instead of throwing', () => {
+    const handlers = new Map<string, (p?: unknown) => void>();
+    const socket: any = {
+      data: { user: { id: 'u1', role: 'STUDENT' } },
+      rooms: new Set(),
+      on: (e: string, h: (p?: unknown) => void) => handlers.set(e, h),
+      join: vi.fn(),
+      leave: vi.fn(),
+      emit: vi.fn(),
+    };
+    const io: any = {
+      use: vi.fn(),
+      of: () => ({ sockets: new Map() }),
+      on: (_e: string, connect: (s: unknown) => void) => connect(socket),
+    };
+    setupSocketIO(io);
+    socket.join.mockClear();
+    for (const [event, handler] of handlers) {
+      if (event === 'disconnect') continue;
+      for (const bad of [undefined, null, 7, 'x', {}, { slotId: 1, orderId: {}, canteenId: [], studentId: 'a b' }]) {
+        expect(() => handler(bad)).not.toThrow();
+      }
+    }
+    expect(socket.join).not.toHaveBeenCalled();
   });
 });

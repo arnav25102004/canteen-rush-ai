@@ -1,3 +1,4 @@
+import { invalidateAuthUser } from '../services/authUser.service';
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { verifyFirebaseToken, devAuthEnabled } from '../config/firebase';
@@ -175,6 +176,8 @@ export async function register(req: Request, res: Response) {
       data: { firebaseUid: decoded.uid, institutionId: institution.id },
       include: { wallet: true },
     });
+    await invalidateAuthUser(existingByEmail.firebaseUid);
+    await invalidateAuthUser(decoded.uid);
     return res.status(200).json({ user, institution });
   }
 
@@ -217,16 +220,18 @@ export async function updateMe(req: AuthRequest, res: Response) {
     where: { id: req.user!.id },
     data: parse.data,
   });
+  await invalidateAuthUser(req.user!.firebaseUid);
   return res.json({ user });
 }
 
 export async function saveFcmToken(req: AuthRequest, res: Response) {
   const { fcmToken } = req.body;
-  if (!fcmToken) return res.status(400).json({ error: 'fcmToken required' });
+  if (typeof fcmToken !== 'string' || !fcmToken) return res.status(400).json({ error: 'fcmToken required' });
 
-  await prisma.user.update({
-    where: { id: req.user!.id },
-    data: { fcmToken },
-  });
+  // A shared phone must stop receiving the previous account's order updates.
+  await prisma.$transaction([
+    prisma.user.updateMany({ where: { fcmToken, id: { not: req.user!.id } }, data: { fcmToken: null } }),
+    prisma.user.update({ where: { id: req.user!.id }, data: { fcmToken } }),
+  ]);
   return res.json({ success: true });
 }
