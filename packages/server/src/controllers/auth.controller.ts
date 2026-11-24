@@ -1,3 +1,6 @@
+import { invalidateAuthUser } from '../services/authUser.service';
+import { cached, invalidateLocal } from '../config/cache';
+import { meKey } from '../services/catalogCache.service';
 import { Request, Response } from 'express';
 import { prisma } from '../config/database';
 import { verifyFirebaseToken, devAuthEnabled } from '../config/firebase';
@@ -175,6 +178,8 @@ export async function register(req: Request, res: Response) {
       data: { firebaseUid: decoded.uid, institutionId: institution.id },
       include: { wallet: true },
     });
+    await invalidateAuthUser(existingByEmail.firebaseUid);
+    await invalidateAuthUser(decoded.uid);
     return res.status(200).json({ user, institution });
   }
 
@@ -199,14 +204,17 @@ export async function register(req: Request, res: Response) {
 }
 
 export async function getMe(req: AuthRequest, res: Response) {
-  const user = await prisma.user.findUnique({
-    where: { id: req.user!.id },
-    include: {
-      wallet: { select: { balance: true } },
-      vendorCanteen: { select: { id: true, name: true } },
-    },
-  });
-  return res.json({ user });
+  const userId = req.user!.id;
+  const body = await cached(meKey(userId), async () => ({
+    user: await prisma.user.findUnique({
+      where: { id: userId },
+      include: {
+        wallet: { select: { balance: true } },
+        vendorCanteen: { select: { id: true, name: true } },
+      },
+    }),
+  }), { ttl: 3, stale: 0, local: true });
+  return res.setHeader('Cache-Control', 'private, no-store').json(body);
 }
 
 export async function updateMe(req: AuthRequest, res: Response) {
@@ -217,16 +225,18 @@ export async function updateMe(req: AuthRequest, res: Response) {
     where: { id: req.user!.id },
     data: parse.data,
   });
+  await Promise.all([invalidateAuthUser(req.user!.firebaseUid), invalidateLocal(meKey(req.user!.id))]);
   return res.json({ user });
 }
 
 export async function saveFcmToken(req: AuthRequest, res: Response) {
   const { fcmToken } = req.body;
-  if (!fcmToken) return res.status(400).json({ error: 'fcmToken required' });
+  if (typeof fcmToken !== 'string' || !fcmToken) return res.status(400).json({ error: 'fcmToken required' });
 
-  await prisma.user.update({
-    where: { id: req.user!.id },
-    data: { fcmToken },
-  });
+  // A shared phone must stop receiving the previous account's order updates.
+  await prisma.$transaction([
+    prisma.user.updateMany({ where: { fcmToken, id: { not: req.user!.id } }, data: { fcmToken: null } }),
+    prisma.user.update({ where: { id: req.user!.id }, data: { fcmToken } }),
+  ]);
   return res.json({ success: true });
 }

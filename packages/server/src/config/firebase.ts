@@ -1,7 +1,10 @@
 import { initializeApp, getApps, cert } from 'firebase-admin/app';
+import { logger } from '../utils/logger';
 import { getAuth, DecodedIdToken } from 'firebase-admin/auth';
 import { getMessaging } from 'firebase-admin/messaging';
+import { createHash } from 'crypto';
 import path from 'path';
+import { withTimeout } from '../middleware/resilience';
 
 if (!getApps().length) {
   let initialized = false;
@@ -11,7 +14,7 @@ if (!getApps().length) {
     const serviceAccount = require(path.resolve(__dirname, '../../firebase-service-account.json'));
     initializeApp({ credential: cert(serviceAccount) });
     initialized = true;
-    console.log('Firebase Admin initialized via JSON file ✅');
+    logger.info('Firebase Admin initialized via JSON file ✅');
   } catch {}
 
   // Try 2: Environment variables (production)
@@ -33,14 +36,14 @@ if (!getApps().length) {
         }),
       });
       initialized = true;
-      console.log('Firebase Admin initialized via env vars ✅');
+      logger.info('Firebase Admin initialized via env vars ✅');
     } catch (err) {
-      console.warn('Firebase env var init failed:', (err as Error).message);
+      logger.warn('Firebase env var init failed', { error: (err as Error).message });
     }
   }
 
   if (!initialized) {
-    console.warn('Firebase not configured — all real tokens will be rejected');
+    logger.warn('Firebase not configured — all real tokens will be rejected');
   }
 }
 
@@ -59,6 +62,10 @@ export function devAuthEnabled(): boolean {
   return process.env.NODE_ENV !== 'production' && process.env.DEV_AUTH === 'true';
 }
 
+const VERIFIED_TTL_MS = 60_000;
+const VERIFIED_MAX = 50_000;
+const verifiedTokens = new Map<string, { decoded: DecodedIdToken; until: number }>();
+
 export async function verifyFirebaseToken(token: string): Promise<DecodedIdToken | null> {
   try {
     if (token.startsWith('dev.') && token.endsWith('.mock')) {
@@ -69,11 +76,20 @@ export async function verifyFirebaseToken(token: string): Promise<DecodedIdToken
     // Never trust an unverified JWT: without Firebase Admin there is no way to
     // check the signature, so reject instead of decoding the payload blindly.
     if (!getApps().length) return null;
+    // Keyed by hash so raw tokens are not kept in memory. Bans and roles are still checked per request.
+    const cacheKey = createHash('sha256').update(token).digest('base64url');
+    const known = verifiedTokens.get(cacheKey);
+    if (known && Date.now() < known.until) return known.decoded;
+    verifiedTokens.delete(cacheKey);
+
     const decoded = await getAuth().verifyIdToken(token);
     // Only verified inboxes count as an identity — otherwise anyone could sign
     // up with someone else's college address. Clients check
     // user.emailVerified first to show a "verify your email" screen.
-    return decoded.email_verified === true ? decoded : null;
+    if (decoded.email_verified !== true) return null;
+    if (verifiedTokens.size >= VERIFIED_MAX) verifiedTokens.delete(verifiedTokens.keys().next().value as string);
+    verifiedTokens.set(cacheKey, { decoded, until: Math.min(Date.now() + VERIFIED_TTL_MS, decoded.exp * 1000) });
+    return decoded;
   } catch {
     return null;
   }
@@ -87,10 +103,10 @@ export async function sendPushNotification(
 ): Promise<boolean> {
   try {
     if (!getApps().length) return false;
-    await getMessaging().send({ token: fcmToken, notification: { title, body }, data });
+    await withTimeout(getMessaging().send({ token: fcmToken, notification: { title, body }, data }), 5_000, 'FCM send');
     return true;
   } catch (err) {
-    console.error('FCM send error:', err);
+    logger.error('FCM send error', { error: (err as Error)?.message });
     return false;
   }
 }

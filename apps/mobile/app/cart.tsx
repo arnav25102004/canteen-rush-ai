@@ -4,7 +4,7 @@ import { useCartStore } from '../store/cartStore';
 
 export default function CartScreen() {
   const router = useRouter();
-  const { items, canteenName, updateQty, removeItem, total, clear } = useCartStore();
+  const { items, canteenName, updateQty, total, clear } = useCartStore();
 
   if (items.length === 0) {
     return (

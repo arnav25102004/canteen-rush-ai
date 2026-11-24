@@ -14,14 +14,21 @@ interface Category {
 export default function MenuPage() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [showForm, setShowForm] = useState(false);
+  const [error, setError] = useState('');
   const [newCategory, setNewCategory] = useState('');
   const [form, setForm] = useState({ name: '', price: '', categoryId: '', description: '', prepTimeMinutes: '10', isVeg: true });
 
   // Vendor's own menu, including unavailable items (the public menu hides them,
   // which used to make toggled-off items vanish with no way to turn them back on).
   const load = useCallback(async () => {
-    const { data } = await api.get('/vendor/my-menu');
-    setCategories(data.categories || []);
+    try {
+      const { data } = await api.get('/vendor/my-menu');
+      setCategories(data.categories || []);
+      setError('');
+    } catch (e: any) {
+      const msg = e?.response?.data?.error;
+      setError(typeof msg === 'string' ? msg : 'Could not load the menu.');
+    }
   }, []);
 
   useEffect(() => { load(); }, [load]);
@@ -32,8 +39,10 @@ export default function MenuPage() {
   };
 
   async function toggleAvailability(itemId: string) {
-    await api.patch(`/vendor/items/${itemId}/availability`);
-    load();
+    try {
+      await api.patch(`/vendor/items/${itemId}/availability`);
+      load();
+    } catch (e) { setError(errorText(e)); }
   }
 
   async function addCategory() {
@@ -77,6 +86,8 @@ export default function MenuPage() {
           </button>
           </div>
         </div>
+
+        {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
 
         {showForm && (
           <div className="bg-white rounded-xl shadow-sm p-6 mb-6">

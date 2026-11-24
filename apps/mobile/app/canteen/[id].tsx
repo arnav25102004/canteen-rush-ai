@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { View, Text, FlatList, TouchableOpacity, ScrollView, StyleSheet, ActivityIndicator } from 'react-native';
 import { useLocalSearchParams, useRouter } from 'expo-router';
 import api from '../../services/api';
+import { getSocket } from '../../services/socket';
 import { useCartStore } from '../../store/cartStore';
 
 interface MenuItem { id: string; name: string; price: number; description?: string; isVeg: boolean; isAvailable: boolean; isPopular: boolean; prepTimeMinutes: number; }
@@ -30,6 +31,27 @@ export default function CanteenMenuScreen() {
       }).catch(() => null),
       api.get('/menu/favorites').then(r => setFavorites(new Set((r.data.favorites as any[]).map((f: any) => f.id)))).catch(() => null),
     ]).finally(() => setLoading(false));
+  }, [id]);
+
+  // Live menu: a vendor's out-of-stock or price change appears without a refresh.
+  useEffect(() => {
+    if (!id) return;
+    const socket = getSocket();
+    const join = () => socket.emit('join:menu', { canteenId: id });
+    const onUpdate = () => {
+      api.get(`/canteens/${id}/menu`).then(r => {
+        setCategories(r.data.categories || []);
+        setPopular(r.data.popular || []);
+      }).catch(() => null);
+    };
+    if (socket.connected) join();
+    socket.on('connect', join);
+    socket.on('menu:updated', onUpdate);
+    return () => {
+      socket.emit('leave:menu', { canteenId: id });
+      socket.off('connect', join);
+      socket.off('menu:updated', onUpdate);
+    };
   }, [id]);
 
   async function toggleFavorite(menuItemId: string) {

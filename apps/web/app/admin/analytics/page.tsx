@@ -2,7 +2,7 @@
 import { useEffect, useState } from 'react';
 import Sidebar from '../../../components/shared/Sidebar';
 import api from '../../../lib/api';
-import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, Legend } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 
 const COLORS = ['#e94560', '#1a1a2e', '#10b981', '#3b82f6', '#f59e0b'];
 
@@ -40,7 +40,7 @@ export default function AdminAnalyticsPage() {
         <div className="grid grid-cols-4 gap-4 mb-8">
           {[
             { label: 'Total Orders', value: overview?.totalOrders ?? '—', icon: '📋' },
-            { label: 'Total Revenue', value: totalRevenue > 0 ? `₹${totalRevenue.toFixed(0)}` : (overview?.totalRevenue ? `₹${Number(overview.totalRevenue).toFixed(0)}` : '—'), icon: '💰' },
+            { label: `Revenue (${period})`, value: `₹${totalRevenue.toFixed(0)}`, icon: '💰' },
             { label: 'Active Canteens', value: overview?.activeCanteens ?? '—', icon: '🏪' },
             { label: 'Avg Order Value', value: overview?.totalOrders && overview?.totalRevenue ? `₹${(Number(overview.totalRevenue) / Number(overview.totalOrders)).toFixed(0)}` : '—', icon: '📊' },
           ].map(s => (
@@ -90,7 +90,7 @@ export default function AdminAnalyticsPage() {
 
         {/* Canteens Table */}
         <div className="bg-white rounded-xl shadow-sm mt-6 overflow-hidden">
-          <div className="p-6 border-b font-semibold text-gray-700">All Canteens — Performance ({period})</div>
+          <div className="p-6 border-b font-semibold text-gray-700">Active Canteens (Last 24h)</div>
           <div className="divide-y">
             {overview?.canteens?.map((c: any) => (
               <div key={c.id} className="px-6 py-4 flex items-center justify-between">
@@ -101,7 +101,7 @@ export default function AdminAnalyticsPage() {
                 <div className="flex items-center gap-8 text-sm">
                   <div className="text-right">
                     <p className="font-semibold text-gray-700">{c._count.orders}</p>
-                    <p className="text-gray-400">orders today</p>
+                    <p className="text-gray-400">orders (24h)</p>
                   </div>
                   <span className={`px-3 py-1 rounded-full text-xs font-semibold ${c.isActive ? 'bg-green-100 text-green-700' : 'bg-red-100 text-red-600'}`}>
                     {c.isActive ? 'Active' : 'Closed'}

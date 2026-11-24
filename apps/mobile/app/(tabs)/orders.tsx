@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from 'react';
+import { useState, useCallback } from 'react';
 import { View, Text, FlatList, TouchableOpacity, RefreshControl, StyleSheet } from 'react-native';
 import { useRouter, useFocusEffect } from 'expo-router';
 import api from '../../services/api';
@@ -21,10 +21,12 @@ export default function OrdersScreen() {
   const [reviewed, setReviewed] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
-    const { data } = await api.get('/orders');
-    setOrders(data.orders || []);
-    // Best effort: without it the chip just shows "Rate" and the server answers if already reviewed.
-    getReviewedOrderIds().then(setReviewed).catch(() => {});
+    try {
+      const { data } = await api.get('/orders');
+      setOrders(data.orders || []);
+      // Best effort: without it the chip just shows "Rate" and the server answers if already reviewed.
+      getReviewedOrderIds().then(setReviewed).catch(() => {});
+    } catch { /* keep the last list; pull to refresh retries */ }
   }, []);
 
   useFocusEffect(useCallback(() => { load(); }, [load]));

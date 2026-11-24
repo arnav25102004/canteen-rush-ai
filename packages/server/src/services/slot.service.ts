@@ -1,5 +1,6 @@
 import { prisma } from '../config/database';
-import { cacheGet, cacheSet, slotCacheKeys } from '../config/redis';
+import { cached } from '../config/cache';
+import { invalidateSlots, loadSlotRows, slotsKey } from './catalogCache.service';
 import { generateTimeSlots, slotStartsAt, SLOT_CUTOFF_MS } from '../utils/helpers';
 import { UserRole } from '@prisma/client';
 
@@ -17,17 +18,19 @@ export interface SlotAvailability {
   isOpen: boolean;
 }
 
-export async function getSlotAvailability(slotId: string, userRole?: UserRole): Promise<SlotAvailability | null> {
-  const isFaculty = userRole === UserRole.FACULTY || userRole === UserRole.ADMIN;
-  const [studentKey, facultyKey] = slotCacheKeys(slotId);
-  const cacheKey = isFaculty ? facultyKey : studentKey;
+interface SlotRow {
+  id: string;
+  date: Date | string;
+  startTime: string;
+  endTime: string;
+  maxOrders: number;
+  walkInReserved: number;
+  facultyReserved: number;
+  currentOrders: number;
+  isOpen: boolean;
+}
 
-  const cached = await cacheGet(cacheKey);
-  if (cached) return JSON.parse(cached);
-
-  const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
-  if (!slot) return null;
-
+function toAvailability(slot: SlotRow, isFaculty: boolean): SlotAvailability {
   // Faculty can use both general + faculty-reserved slots; students cannot use faculty-reserved
   const preOrderCapacity = isFaculty
     ? slot.maxOrders - slot.walkInReserved
@@ -38,11 +41,11 @@ export async function getSlotAvailability(slotId: string, userRole?: UserRole): 
     ? Math.round((slot.currentOrders / preOrderCapacity) * 100)
     : 100;
 
-  const availability: SlotAvailability = {
-    slotId,
+  return {
+    slotId: slot.id,
     startTime: slot.startTime,
     endTime: slot.endTime,
-    date: slot.date.toISOString().split('T')[0],
+    date: new Date(slot.date).toISOString().split('T')[0],
     totalCapacity: slot.maxOrders,
     preOrderCapacity,
     booked: slot.currentOrders,
@@ -51,9 +54,6 @@ export async function getSlotAvailability(slotId: string, userRole?: UserRole): 
     isFull: available <= 0,
     isOpen: slot.isOpen,
   };
-
-  await cacheSet(cacheKey, 30, JSON.stringify(availability));
-  return availability;
 }
 
 export async function generateSlotsForCanteen(
@@ -77,6 +77,7 @@ export async function generateSlotsForCanteen(
     });
     created.push(s);
   }
+  await invalidateSlots(canteenId, date);
   return created;
 }
 
@@ -99,18 +100,18 @@ export async function listSlotsWithAvailability(
   now: number = Date.now(),
 ): Promise<{ slots: SlotWithCutoff[]; date: string }> {
   const targetDate = new Date(`${day}T00:00:00.000Z`);
-  const slots = await prisma.pickupSlot.findMany({
-    where: { canteenId, date: targetDate },
-    orderBy: { startTime: 'asc' },
+  // One cached row set for every role; availability and cutoff are computed per request.
+  const slots = await cached<SlotRow[]>(slotsKey(canteenId, day), () => loadSlotRows(canteenId, day), {
+    ttl: 5,
+    stale: 30,
+    cacheIf: (rows) => rows.length > 0,
   });
+  const isFaculty = userRole === UserRole.FACULTY || userRole === UserRole.ADMIN;
 
-  // Fetch all availabilities in parallel, passing user role for faculty priority
-  const availabilities = await Promise.all(slots.map((s) => getSlotAvailability(s.id, userRole)));
-
-  const enriched = slots.map((slot, i) => ({
-    ...availabilities[i],
-    isCutoffPassed: slotStartsAt(slot.date, slot.startTime).getTime() - now < SLOT_CUTOFF_MS,
-  })) as SlotWithCutoff[];
+  const enriched: SlotWithCutoff[] = slots.map((slot) => ({
+    ...toAvailability(slot, isFaculty),
+    isCutoffPassed: slotStartsAt(new Date(slot.date), slot.startTime).getTime() - now < SLOT_CUTOFF_MS,
+  }));
 
   return { slots: enriched, date: targetDate.toISOString().split('T')[0] };
 }

@@ -45,7 +45,7 @@ export default function HomeScreen() {
     return api.get(canteenUrl).then(r => {
       const list = r.data.canteens || [];
       setCanteens(list);
-    });
+    }).catch(() => null); // keep the last list; the next poll retries
   }
 
   useEffect(() => {
@@ -63,7 +63,10 @@ export default function HomeScreen() {
       if (!dismissed) setChangelog(latest);
     }).catch(() => null);
 
-    pollRef.current = setInterval(fetchCanteens, 15000);
+    // Jittered so a whole campus does not refresh in the same second; paused in the background.
+    pollRef.current = setInterval(() => {
+      if (AppState.currentState === 'active') fetchCanteens();
+    }, 30000 + Math.floor(Math.random() * 5000));
 
     const appStateSub = AppState.addEventListener('change', state => {
       if (state === 'active') fetchCanteens();

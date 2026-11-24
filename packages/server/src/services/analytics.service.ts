@@ -1,6 +1,6 @@
 import { prisma } from '../config/database';
 import { buildDateRange } from '../utils/helpers';
-import { OrderStatus } from '@prisma/client';
+import { OrderStatus, Prisma } from '@prisma/client';
 
 export async function getVendorSummary(canteenId: string, period: 'today' | 'week' | 'month' = 'today') {
   const now = new Date();
@@ -10,10 +10,10 @@ export async function getVendorSummary(canteenId: string, period: 'today' | 'wee
   } else if (period === 'month') {
     start = new Date(now); start.setMonth(now.getMonth() - 1);
   } else {
-    start = new Date(now); start.setHours(0, 0, 0, 0);
+    start = buildDateRange().gte; // today in IST, whatever the server's timezone
   }
 
-  const [orders, revenue, avgPrepTime] = await Promise.all([
+  const [orders, revenue, avgPrep] = await Promise.all([
     prisma.order.count({
       where: { canteenId, createdAt: { gte: start }, status: { not: OrderStatus.CANCELLED } },
     }),
@@ -21,15 +21,13 @@ export async function getVendorSummary(canteenId: string, period: 'today' | 'wee
       where: { canteenId, createdAt: { gte: start }, paymentStatus: 'PAID' },
       _sum: { totalAmount: true },
     }),
-    prisma.order.findMany({
-      where: { canteenId, actualReadyAt: { not: null }, createdAt: { gte: start } },
-      select: { createdAt: true, actualReadyAt: true },
-    }),
+    prisma.$queryRaw<Array<{ minutes: number | null }>>(Prisma.sql`
+      SELECT AVG(EXTRACT(EPOCH FROM (actual_ready_at - created_at)) / 60)::float AS minutes
+      FROM orders
+      WHERE canteen_id = ${canteenId} AND actual_ready_at IS NOT NULL AND created_at >= ${start}`),
   ]);
 
-  const avgPrepMinutes = avgPrepTime.length > 0
-    ? avgPrepTime.reduce((sum, o) => sum + (o.actualReadyAt!.getTime() - o.createdAt.getTime()) / 60000, 0) / avgPrepTime.length
-    : 0;
+  const avgPrepMinutes = avgPrep[0]?.minutes ?? 0;
 
   return {
     period,
@@ -49,20 +47,13 @@ export async function getPopularItems(canteenId: string, limit = 10) {
 }
 
 export async function getPeakHours(canteenId: string) {
-  const orders = await prisma.order.findMany({
-    where: { canteenId, status: { not: OrderStatus.CANCELLED } },
-    select: { createdAt: true },
-  });
-
-  const hourCounts: Record<number, number> = {};
-  for (const o of orders) {
-    const h = o.createdAt.getHours();
-    hourCounts[h] = (hourCounts[h] || 0) + 1;
-  }
-
-  return Object.entries(hourCounts)
-    .map(([hour, count]) => ({ hour: parseInt(hour), count }))
-    .sort((a, b) => a.hour - b.hour);
+  // created_at is stored in UTC; peak hours are reported in IST.
+  const rows = await prisma.$queryRaw<Array<{ hour: number; count: bigint }>>(Prisma.sql`
+    SELECT EXTRACT(HOUR FROM created_at AT TIME ZONE 'UTC' AT TIME ZONE 'Asia/Kolkata')::int AS hour, COUNT(*) AS count
+    FROM orders
+    WHERE canteen_id = ${canteenId} AND status <> 'CANCELLED'
+    GROUP BY 1 ORDER BY 1`);
+  return rows.map((r) => ({ hour: r.hour, count: Number(r.count) }));
 }
 
 export async function getCanteenRevenue(period: 'today' | 'week' | 'month' = 'week') {
@@ -73,44 +64,45 @@ export async function getCanteenRevenue(period: 'today' | 'week' | 'month' = 'we
   } else if (period === 'month') {
     start = new Date(now); start.setMonth(now.getMonth() - 1);
   } else {
-    start = new Date(now); start.setHours(0, 0, 0, 0);
+    start = buildDateRange().gte;
   }
 
-  const canteens = await prisma.canteen.findMany({
-    where: { isActive: true },
-    select: { id: true, name: true },
-  });
+  const [canteens, orderCounts, revenue] = await Promise.all([
+    prisma.canteen.findMany({ where: { isActive: true }, select: { id: true, name: true } }),
+    prisma.order.groupBy({
+      by: ['canteenId'],
+      where: { createdAt: { gte: start }, status: { not: OrderStatus.CANCELLED } },
+      _count: { _all: true },
+    }),
+    prisma.order.groupBy({
+      by: ['canteenId'],
+      where: { createdAt: { gte: start }, paymentStatus: 'PAID' },
+      _sum: { totalAmount: true },
+    }),
+  ]);
+  const ordersBy = new Map(orderCounts.map((r) => [r.canteenId, r._count._all]));
+  const revenueBy = new Map(revenue.map((r) => [r.canteenId, Number(r._sum.totalAmount ?? 0)]));
 
-  const results = await Promise.all(
-    canteens.map(async (c) => {
-      const [orders, revenue] = await Promise.all([
-        prisma.order.count({ where: { canteenId: c.id, createdAt: { gte: start }, status: { not: OrderStatus.CANCELLED } } }),
-        prisma.order.aggregate({ where: { canteenId: c.id, createdAt: { gte: start }, paymentStatus: 'PAID' }, _sum: { totalAmount: true } }),
-      ]);
-      return { id: c.id, name: c.name, orders, revenue: Number(revenue._sum.totalAmount ?? 0) };
-    })
-  );
-
-  return results;
+  return canteens.map((c) => ({ id: c.id, name: c.name, orders: ordersBy.get(c.id) ?? 0, revenue: revenueBy.get(c.id) ?? 0 }));
 }
 
 export async function getAdminOverview() {
-  const [totalOrders, totalRevenue, canteens] = await Promise.all([
+  const since = new Date(Date.now() - 86400000);
+  const [totalOrders, totalRevenue, canteens, recent] = await Promise.all([
     prisma.order.count({ where: { status: { not: OrderStatus.CANCELLED } } }),
     prisma.order.aggregate({ where: { paymentStatus: 'PAID' }, _sum: { totalAmount: true } }),
     prisma.canteen.findMany({
       where: { isActive: true },
-      select: {
-        id: true, name: true, campus: true,
-        _count: { select: { orders: { where: { createdAt: { gte: new Date(Date.now() - 86400000) } } } } },
-      },
+      select: { id: true, name: true, campus: true, isActive: true },
     }),
+    prisma.order.groupBy({ by: ['canteenId'], where: { createdAt: { gte: since } }, _count: { _all: true } }),
   ]);
+  const recentBy = new Map(recent.map((r) => [r.canteenId, r._count._all]));
 
   return {
     totalOrders,
     totalRevenue: Number(totalRevenue._sum.totalAmount ?? 0),
     activeCanteens: canteens.length,
-    canteens,
+    canteens: canteens.map((c) => ({ ...c, _count: { orders: recentBy.get(c.id) ?? 0 } })),
   };
 }

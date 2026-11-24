@@ -1,13 +1,16 @@
 import { AppError } from '../utils/errors';
 import Razorpay from 'razorpay';
+import { randomUUID } from 'crypto';
 import { prisma } from '../config/database';
-import { cacheDel, slotCacheKeys } from '../config/redis';
 import { generateQRToken } from './qr.service';
-import { sendOrderNotification } from './notification.service';
+import { enqueue, enqueueMany, OutboxEvent } from './outbox.service';
+import { invalidateOrderViews, invalidateSlots } from './catalogCache.service';
+import { withTimeout } from '../middleware/resilience';
 import { validatePointsRedemption, redeemPoints, refundRedeemedPoints } from './loyalty.service';
 import { FEATURES } from '../config/features';
-import { istDateKey, slotStartsAt, SLOT_CUTOFF_MS, NO_SHOW_GRACE_MS, NO_SHOW_STRIKE_LIMIT, NO_SHOW_BAN_MS } from '../utils/helpers';
-import { OrderStatus, PaymentMethod, PaymentStatus, UserRole } from '@prisma/client';
+import { generatePickupCode, istDateKey, slotStartsAt, SLOT_CUTOFF_MS, NO_SHOW_GRACE_MS, NO_SHOW_STRIKE_LIMIT, NO_SHOW_BAN_MS } from '../utils/helpers';
+import { logger } from '../utils/logger';
+import { OrderStatus, PaymentMethod, Prisma, UserRole } from '@prisma/client';
 
 interface PlaceOrderInput {
   userId: string;
@@ -17,6 +20,8 @@ interface PlaceOrderInput {
   items: Array<{ menuItemId: string; quantity: number; customizations?: Record<string, unknown>; notes?: string }>;
   specialInstructions?: string;
   pointsToRedeem?: number;
+  /** Client-generated per checkout attempt, so a retried request cannot order twice. */
+  clientRequestId?: string;
 }
 
 export interface PlaceOrderResult {
@@ -35,15 +40,107 @@ export interface PlaceOrderResult {
 
 type IoLike = { to: (room: string) => { emit: (event: string, data: unknown) => void } } | undefined;
 
-/** CC-YYYYMMDD-NNNN from a per-day Postgres counter (atomic upsert, no Redis needed). */
+/**
+ * CC-YYYYMMDD-NNNN from a Postgres sequence. nextval never blocks, unlike a shared
+ * counter row, so order placement has no global write hot spot. The number keeps
+ * rising across days and may have gaps.
+ */
 export async function generateOrderNumber(): Promise<string> {
-  const date = istDateKey();
-  const { seq } = await prisma.orderCounter.upsert({
-    where: { date },
-    create: { date, seq: 1 },
-    update: { seq: { increment: 1 } },
+  const [{ seq }] = await prisma.$queryRaw<Array<{ seq: bigint }>>`SELECT nextval('order_number_seq') AS seq`;
+  return `CC-${istDateKey()}-${String(seq).padStart(4, '0')}`;
+}
+
+const ORDER_RESPONSE_INCLUDE = {
+  items: { include: { menuItem: { select: { name: true } } } },
+  slot: { select: { startTime: true, endTime: true } },
+} satisfies Prisma.OrderInclude;
+
+/** Creates the Razorpay order and stores its id. If a concurrent request stored one first, that one is used. */
+async function attachRazorpayOrder(
+  order: { id: string; orderNumber: string; userId: string; canteenId: string; totalAmount: number },
+  razorpayAccountId: string,
+  totalCounterPrice: number,
+): Promise<NonNullable<PlaceOrderResult['razorpay']>> {
+  const rzp = new Razorpay({
+    key_id: process.env.RAZORPAY_KEY_ID!,
+    key_secret: process.env.RAZORPAY_KEY_SECRET!,
   });
-  return `CC-${date}-${String(seq).padStart(4, '0')}`;
+  const amountPaise = Math.round(order.totalAmount * 100);
+  // Vendor receives their counter price, capped at what student actually pays
+  const counterPaise = Math.min(Math.round(totalCounterPrice * 100), amountPaise);
+
+  const rzpOrder = await withTimeout(rzp.orders.create({
+    amount: amountPaise,
+    currency: 'INR',
+    receipt: `cr_${order.orderNumber}`.slice(0, 40),
+    transfers: [
+      {
+        account: razorpayAccountId,
+        amount: counterPaise,
+        currency: 'INR',
+        on_hold: 0,
+      },
+    ],
+    notes: { canteenId: order.canteenId, userId: order.userId, orderNumber: order.orderNumber },
+  }), 10_000, 'Razorpay order');
+
+  const { count } = await prisma.order.updateMany({
+    where: { id: order.id, razorpayOrderId: null },
+    data: { razorpayOrderId: rzpOrder.id },
+  });
+  const orderId = count === 1
+    ? rzpOrder.id
+    : (await prisma.order.findUniqueOrThrow({ where: { id: order.id }, select: { razorpayOrderId: true } })).razorpayOrderId!;
+  return { orderId, amount: amountPaise, currency: 'INR', keyId: process.env.RAZORPAY_KEY_ID! };
+}
+
+/**
+ * The original result for a repeated clientRequestId. Payment details are returned only
+ * while the order still awaits payment. If the first attempt committed the order but
+ * failed to reach Razorpay, the retry creates the missing Razorpay order.
+ */
+async function findPlacedOrder(userId: string, idempotencyKey: string): Promise<PlaceOrderResult | null> {
+  const order = await prisma.order.findUnique({
+    where: { userId_idempotencyKey: { userId, idempotencyKey } },
+    include: { ...ORDER_RESPONSE_INCLUDE, walletTransaction: { select: { type: true, amount: true } } },
+  });
+  if (!order) return null;
+  const { walletTransaction, ...rest } = order;
+  const totalAmount = Number(order.totalAmount);
+
+  let razorpay: PlaceOrderResult['razorpay'] = null;
+  if (order.paymentMethod === 'RAZORPAY' && order.status === OrderStatus.PENDING && order.paymentStatus === 'AWAITING_PAYMENT') {
+    if (order.razorpayOrderId) {
+      razorpay = { orderId: order.razorpayOrderId, amount: Math.round(totalAmount * 100), currency: 'INR', keyId: process.env.RAZORPAY_KEY_ID! };
+    } else {
+      const source = await prisma.order.findUniqueOrThrow({
+        where: { id: order.id },
+        select: {
+          canteen: { select: { razorpayAccountId: true } },
+          items: { select: { quantity: true, menuItem: { select: { price: true, counterPrice: true } } } },
+        },
+      });
+      if (source.canteen.razorpayAccountId) {
+        const totalCounterPrice = source.items.reduce(
+          (sum, i) => sum + Number(i.menuItem.counterPrice ?? i.menuItem.price) * i.quantity, 0,
+        );
+        razorpay = await attachRazorpayOrder(
+          { id: order.id, orderNumber: order.orderNumber, userId, canteenId: order.canteenId, totalAmount },
+          source.canteen.razorpayAccountId,
+          totalCounterPrice,
+        );
+      }
+    }
+  }
+
+  return {
+    order: rest as unknown as Record<string, unknown>,
+    razorpay,
+    upiAmount: totalAmount,
+    pointsDiscount: Number(order.discountAmount),
+    walletDeduction: walletTransaction?.type === 'DEBIT' ? Number(walletTransaction.amount) : 0,
+    subtotal: Number(order.subtotal),
+  };
 }
 
 /**
@@ -99,10 +196,17 @@ export async function quoteOrder(draft: OrderDraft): Promise<OrderQuote> {
   const slotId = draft.slotId ?? undefined;
 
   // Validate items belong to this canteen and are available
-  const menuItems = await prisma.menuItem.findMany({
-    where: { id: { in: items.map((i) => i.menuItemId) }, canteenId },
-    select: { id: true, name: true, price: true, counterPrice: true, isAvailable: true, isVeg: true },
-  });
+  const [menuItems, canteen, slot] = await Promise.all([
+    prisma.menuItem.findMany({
+      where: { id: { in: items.map((i) => i.menuItemId) }, canteenId },
+      select: { id: true, name: true, price: true, counterPrice: true, isAvailable: true, isVeg: true },
+    }),
+    prisma.canteen.findUnique({
+      where: { id: canteenId },
+      select: { id: true, name: true, isActive: true, razorpayAccountId: true, institutionId: true },
+    }),
+    slotId ? prisma.pickupSlot.findUnique({ where: { id: slotId } }) : null,
+  ]);
 
   if (menuItems.length !== new Set(items.map((i) => i.menuItemId)).size) {
     throw new AppError(400, 'One or more items are invalid or belong to a different canteen');
@@ -113,10 +217,6 @@ export async function quoteOrder(draft: OrderDraft): Promise<OrderQuote> {
     throw new AppError(400, `${unavailable.map((m) => m.name).join(', ')} ${unavailable.length > 1 ? 'are' : 'is'} currently unavailable`);
   }
 
-  const canteen = await prisma.canteen.findUnique({
-    where: { id: canteenId },
-    select: { id: true, name: true, isActive: true, razorpayAccountId: true, institutionId: true },
-  });
   if (!canteen || !canteen.isActive) throw new AppError(404, 'Canteen not found');
   if (draft.institutionId && canteen.institutionId !== draft.institutionId) throw new AppError(404, 'Canteen not found');
 
@@ -125,7 +225,6 @@ export async function quoteOrder(draft: OrderDraft): Promise<OrderQuote> {
   let slotCap = 0;
   let slotInfo: OrderQuote['slot'] = null;
   if (slotId) {
-    const slot = await prisma.pickupSlot.findUnique({ where: { id: slotId } });
     if (!slot || slot.canteenId !== canteenId || !slot.isOpen) {
       throw new AppError(400, 'This time slot is closed. Please choose another slot.');
     }
@@ -190,27 +289,38 @@ export async function findRecentOrdersForUser(userId: string, limit: number) {
 }
 
 export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<PlaceOrderResult> {
-  const { userId, userRole, canteenId, slotId, items, specialInstructions, pointsToRedeem = 0 } = input;
+  const { userId, userRole, canteenId, slotId, items, specialInstructions, pointsToRedeem = 0, clientRequestId } = input;
+
+  // Checked first: a retry must get its order back even if the slot has since filled.
+  if (clientRequestId) {
+    const existing = await findPlacedOrder(userId, clientRequestId);
+    if (existing) return existing;
+  }
 
   const quote = await quoteOrder({ userRole, canteenId, slotId, items });
   const { canteen, slotCap, subtotal, totalCounterPrice } = quote;
+  const orderId = randomUUID();
   const orderItems = quote.lines.map((l) => ({
+    id: randomUUID(),
+    orderId,
     menuItemId: l.menuItemId,
     quantity: l.quantity,
     unitPrice: l.unitPrice,
     totalPrice: l.totalPrice,
-    customizations: l.customizations,
+    customizations: l.customizations as Prisma.InputJsonValue,
     notes: l.notes,
   }));
 
-  const pointsValidation = await validatePointsRedemption(userId, pointsToRedeem);
+  const [pointsValidation, wallet] = await Promise.all([
+    validatePointsRedemption(userId, pointsToRedeem),
+    prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } }),
+  ]);
   if (!pointsValidation.valid) throw new AppError(400, pointsValidation.error || 'Invalid points redemption');
   const pointsDiscount = pointsValidation.discountAmount;
 
   if (pointsDiscount > subtotal) throw new AppError(400, 'Points discount is larger than the order total');
 
   // Wallet credit is applied automatically
-  const wallet = await prisma.wallet.findUnique({ where: { userId }, select: { id: true, balance: true } });
   const afterPointsDiscount = subtotal - pointsDiscount;
   const walletDeduction = Math.min(wallet ? Number(wallet.balance) : 0, afterPointsDiscount);
   const totalAmount = Math.max(0, afterPointsDiscount - walletDeduction);
@@ -218,18 +328,72 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
   const { paymentMethod, paymentStatus, status } = decidePayment(totalAmount, !!canteen.razorpayAccountId);
   const orderNumber = await generateOrderNumber();
 
-  const order = await prisma.$transaction(async (tx) => {
-    // Conditional updates: a concurrent order can't overbook the slot or overspend the wallet.
-    if (slotId) {
-      const { count } = await tx.pickupSlot.updateMany({
-        where: { id: slotId, isOpen: true, currentOrders: { lt: slotCap } },
-        data: { currentOrders: { increment: 1 } },
-      });
-      if (count === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
-    }
+  // QR token the vendor scans at pickup
+  const qrToken = generateQRToken({ orderId, userId, orderNumber, canteenId });
 
+  // Razorpay orders get their code from the webhook once payment is captured.
+  const pickupCode = paymentMethod === 'RAZORPAY' ? null : generatePickupCode();
+  const events: OutboxEvent[] = [
+    { type: 'menu.totalOrders', payload: { items: items.map(({ menuItemId, quantity }) => ({ menuItemId, quantity })) } },
+    // Razorpay orders announce themselves from the webhook once payment is captured
+    ...(paymentMethod !== 'RAZORPAY'
+      ? [{ type: 'notification.order' as const, payload: { userId, orderId, orderNumber, status: OrderStatus.CONFIRMED } }]
+      : []),
+  ];
+  // Built from what was just written, so the response needs no item or slot queries.
+  const withDetails = <T extends object>(row: T) => ({
+    ...row,
+    items: orderItems.map((item, i) => ({ ...item, menuItem: { name: quote.lines[i].name } })),
+    slot: quote.slot ? { startTime: quote.slot.startTime, endTime: quote.slot.endTime } : null,
+  });
+
+  let order;
+  try {
+    if (walletDeduction === 0 && pointsToRedeem === 0) {
+      // No wallet or points to move: the slot claim and every insert commit as one statement,
+      // so the contended slot row is locked for a single database round trip.
+      const [{ placed }] = await prisma.$queryRaw<Array<{ placed: number }>>(Prisma.sql`
+        WITH slot_claim AS (
+          UPDATE pickup_slots SET current_orders = current_orders + 1
+          WHERE id = ${slotId ?? null}::text AND is_open AND current_orders < ${slotCap}::int
+          RETURNING id
+        ), new_order AS (
+          INSERT INTO orders (
+            id, idempotency_key, qr_code, pickup_code, order_number, user_id, canteen_id, slot_id, status,
+            payment_method, payment_status, subtotal, platform_fee, discount_amount, total_amount,
+            upi_order_note, special_instructions, points_redeemed, updated_at
+          )
+          SELECT
+            ${orderId}::text, ${clientRequestId ?? null}::text, ${qrToken}::text, ${pickupCode}::text, ${orderNumber}::text,
+            ${userId}::text, ${canteenId}::text, ${slotId ?? null}::text, ${status}::"OrderStatus",
+            ${paymentMethod}::"PaymentMethod", ${paymentStatus}::"PaymentStatus", ${subtotal}::numeric, 0, 0, ${totalAmount}::numeric,
+            ${orderNumber}::text, ${specialInstructions ?? null}::text, 0, now()
+          WHERE ${slotId ? Prisma.sql`EXISTS (SELECT 1 FROM slot_claim)` : Prisma.sql`TRUE`}
+          RETURNING id
+        ), new_items AS (
+          INSERT INTO order_items (id, order_id, menu_item_id, quantity, unit_price, total_price, customizations, notes)
+          SELECT x.id, o.id, x."menuItemId", x.quantity, x."unitPrice", x."totalPrice", COALESCE(x.customizations, '{}'::jsonb), x.notes
+          FROM new_order o
+          CROSS JOIN jsonb_to_recordset(${JSON.stringify(orderItems)}::jsonb) AS x(
+            id text, "menuItemId" text, quantity int, "unitPrice" numeric, "totalPrice" numeric, customizations jsonb, notes text
+          )
+        ), new_events AS (
+          INSERT INTO outbox_events (type, payload)
+          SELECT e.type, e.payload
+          FROM new_order
+          CROSS JOIN jsonb_to_recordset(${JSON.stringify(events)}::jsonb) AS e(type text, payload jsonb)
+        )
+        SELECT count(*)::int AS placed FROM new_order`);
+      if (placed === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
+      order = withDetails(await prisma.order.findUniqueOrThrow({ where: { id: orderId } }));
+    } else {
+    order = await prisma.$transaction(async (tx) => {
     const newOrder = await tx.order.create({
       data: {
+        id: orderId,
+        idempotencyKey: clientRequestId,
+        qrCode: qrToken,
+        pickupCode,
         orderNumber,
         userId,
         canteenId,
@@ -244,22 +408,9 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
         upiOrderNote: orderNumber,
         specialInstructions,
         pointsRedeemed: pointsToRedeem,
-        items: {
-          create: orderItems.map((oi) => ({
-            menuItem: { connect: { id: oi.menuItemId } },
-            quantity: oi.quantity,
-            unitPrice: oi.unitPrice,
-            totalPrice: oi.totalPrice,
-            customizations: oi.customizations as object,
-            notes: oi.notes,
-          })),
-        },
-      },
-      include: {
-        items: { include: { menuItem: { select: { name: true } } } },
-        slot: { select: { startTime: true, endTime: true } },
       },
     });
+    await tx.orderItem.createMany({ data: orderItems });
 
     if (walletDeduction > 0 && wallet) {
       const { count } = await tx.wallet.updateMany({
@@ -284,69 +435,55 @@ export async function placeOrder(input: PlaceOrderInput, io?: unknown): Promise<
       await redeemPoints(tx, userId, newOrder.id, pointsToRedeem, pointsDiscount);
     }
 
-    // QR token the vendor scans at pickup
-    const qrToken = generateQRToken({ orderId: newOrder.id, userId, orderNumber, canteenId });
-    await tx.order.update({ where: { id: newOrder.id }, data: { qrCode: qrToken } });
+    await enqueueMany(tx, events);
 
-    return { ...newOrder, qrCode: qrToken };
-  });
+    // Last, so the contended slot row is locked for the shortest time possible.
+    // Conditional updates: a concurrent order can't overbook the slot or overspend the wallet.
+    if (slotId) {
+      const { count } = await tx.pickupSlot.updateMany({
+        where: { id: slotId, isOpen: true, currentOrders: { lt: slotCap } },
+        data: { currentOrders: { increment: 1 } },
+      });
+      if (count === 0) throw new AppError(400, 'This time slot is now full. Please choose another slot.');
+    }
 
-  if (slotId) await cacheDel(...slotCacheKeys(slotId));
+    return withDetails(newOrder);
+    });
+    }
+  } catch (err) {
+    // Two copies of the same request raced: the loser returns the winner's order.
+    const duplicate = err instanceof Prisma.PrismaClientKnownRequestError && (
+      (err.code === 'P2002' && String(err.meta?.target).includes('idempotency_key'))
+      || (err.code === 'P2010' && err.message.includes('(user_id, idempotency_key)'))
+    );
+    if (clientRequestId && duplicate) {
+      const winner = await findPlacedOrder(userId, clientRequestId);
+      if (winner) return winner;
+    }
+    throw err;
+  }
 
-  // Bump totalOrders counters (non-critical)
-  prisma.$transaction(
-    items.map((item) =>
-      prisma.menuItem.update({ where: { id: item.menuItemId }, data: { totalOrders: { increment: item.quantity } } })
-    )
-  ).catch((err) => console.error('[Order] Failed to bump totalOrders:', err));
+  await Promise.all([
+    invalidateOrderViews(orderId, userId),
+    quote.slot ? invalidateSlots(canteenId, quote.slot.date) : undefined,
+  ]);
 
   const ioServer = io as IoLike;
 
   // Razorpay orders announce themselves from the webhook once payment is captured
   if (paymentMethod !== 'RAZORPAY') {
     ioServer?.to(`canteen:${canteenId}`).emit('order:new', { order });
-    await sendOrderNotification(userId, order.id, orderNumber, OrderStatus.CONFIRMED).catch((err) =>
-      console.error('[Order] Notification failed:', err)
-    );
   }
 
-  let razorpayDetails: PlaceOrderResult['razorpay'] = null;
-  if (paymentMethod === 'RAZORPAY') {
-    const rzp = new Razorpay({
-      key_id: process.env.RAZORPAY_KEY_ID!,
-      key_secret: process.env.RAZORPAY_KEY_SECRET!,
-    });
-
-    const amountPaise = Math.round(totalAmount * 100);
-    // Vendor receives their counter price, capped at what student actually pays
-    const counterPaise = Math.min(Math.round(totalCounterPrice * 100), amountPaise);
-
-    // If this throws, the order stays PENDING and the auto-cancel job releases
-    // its slot, wallet credit and points after 10 minutes.
-    const rzpOrder = await rzp.orders.create({
-      amount: amountPaise,
-      currency: 'INR',
-      receipt: `cr_${orderNumber}`.slice(0, 40),
-      transfers: [
-        {
-          account: canteen.razorpayAccountId!,
-          amount: counterPaise,
-          currency: 'INR',
-          on_hold: 0,
-        },
-      ],
-      notes: { canteenId, userId, orderNumber },
-    });
-
-    await prisma.order.update({ where: { id: order.id }, data: { razorpayOrderId: rzpOrder.id } });
-
-    razorpayDetails = {
-      orderId: rzpOrder.id,
-      amount: amountPaise,
-      currency: 'INR',
-      keyId: process.env.RAZORPAY_KEY_ID!,
-    };
-  }
+  // If this throws, the order stays PENDING. A retry with the same clientRequestId
+  // creates the Razorpay order; otherwise auto-cancel releases it after 10 minutes.
+  const razorpayDetails = paymentMethod === 'RAZORPAY'
+    ? await attachRazorpayOrder(
+        { id: order.id, orderNumber, userId, canteenId, totalAmount },
+        canteen.razorpayAccountId!,
+        totalCounterPrice,
+      )
+    : null;
 
   return {
     order: order as unknown as Record<string, unknown>,
@@ -388,7 +525,6 @@ export async function cancelOrder(
   cancelledBy: CancelActor,
   reason?: string,
   io?: unknown,
-  opts: { paymentStatus?: PaymentStatus } = {}
 ) {
   const order = await prisma.$transaction(async (tx) => {
     const order = await tx.order.findUnique({
@@ -398,6 +534,7 @@ export async function cancelOrder(
         totalAmount: true, discountAmount: true, paymentStatus: true, paymentMethod: true, pointsRedeemed: true,
         walletTransaction: { select: { type: true, amount: true } },
         user: { select: { isDeleted: true } },
+        slot: { select: { date: true } },
       },
     });
     if (!order) throw new AppError(404, 'Order not found');
@@ -451,7 +588,7 @@ export async function cancelOrder(
 
     await tx.order.update({
       where: { id: orderId },
-      data: { paymentStatus: opts.paymentStatus ?? (refund > 0 ? 'REFUNDED' : 'EXPIRED') },
+      data: { paymentStatus: refund > 0 ? 'REFUNDED' : 'EXPIRED' },
     });
 
     if (order.slotId) {
@@ -460,20 +597,21 @@ export async function cancelOrder(
         data: { currentOrders: { decrement: 1 } },
       });
     }
+    if (order.userId) {
+      await enqueue(tx, {
+        type: 'notification.order',
+        payload: { userId: order.userId, orderId, orderNumber: order.orderNumber, status: OrderStatus.CANCELLED },
+      });
+    }
     return order;
   });
 
-  if (order.slotId) await cacheDel(...slotCacheKeys(order.slotId));
+  await invalidateOrderViews(orderId, order.userId);
+  if (order.slot) await invalidateSlots(order.canteenId, order.slot.date);
 
   const ioServer = io as IoLike;
   ioServer?.to(`order:${orderId}`).emit('order:status_update', { orderId, status: OrderStatus.CANCELLED });
   ioServer?.to(`canteen:${order.canteenId}`).emit('order:status_update', { orderId, status: OrderStatus.CANCELLED });
-
-  if (order.userId) {
-    await sendOrderNotification(order.userId, orderId, order.orderNumber, OrderStatus.CANCELLED).catch((err) =>
-      console.error('[Order] Notification failed:', err)
-    );
-  }
 }
 
 // Orders paid at the counter, or fully covered by wallet credit / points
@@ -522,6 +660,7 @@ export async function markOrderNoShow(orderId: string): Promise<boolean> {
         pointsRedeemed: true, paymentMethod: true, paymentStatus: true, totalAmount: true,
         walletTransaction: { select: { type: true, amount: true } },
         user: { select: { isDeleted: true } },
+        slot: { select: { date: true } },
       },
     });
 
@@ -574,16 +713,18 @@ export async function markOrderNoShow(orderId: string): Promise<boolean> {
         });
       }
     }
+    if (o.userId) {
+      await enqueue(tx, {
+        type: 'notification.order',
+        payload: { userId: o.userId, orderId, orderNumber: o.orderNumber, status: OrderStatus.NO_SHOW },
+      });
+    }
     return o;
   });
 
   if (!order) return false;
-  if (order.slotId) await cacheDel(...slotCacheKeys(order.slotId));
-  if (order.userId) {
-    await sendOrderNotification(order.userId, orderId, order.orderNumber, OrderStatus.NO_SHOW).catch((err) =>
-      console.error('[Order] No-show notification failed:', err)
-    );
-  }
+  await invalidateOrderViews(orderId, order.userId);
+  if (order.slot) await invalidateSlots(order.canteenId, order.slot.date);
   return true;
 }
 
@@ -596,6 +737,8 @@ export async function sweepNoShowOrders(now: Date = new Date()): Promise<number>
       status: { in: NO_SHOW_ELIGIBLE },
       slot: { date: { lte: new Date(now.getTime() + 24 * 60 * 60 * 1000) } },
     },
+    orderBy: { slot: { date: 'asc' } },
+    take: 1000, // oldest first; the next run continues any backlog
     select: { id: true, slot: { select: { date: true, endTime: true } } },
   });
 
@@ -606,7 +749,7 @@ export async function sweepNoShowOrders(now: Date = new Date()): Promise<number>
     try {
       if (await markOrderNoShow(id)) expired++;
     } catch (err) {
-      console.error(`[Cron] Failed to mark order ${id} as no-show:`, err instanceof Error ? err.message : err);
+      logger.error(`[Cron] Failed to mark order ${id} as no-show`, { error: err instanceof Error ? err.message : err });
     }
   }
   return expired;

@@ -1,4 +1,5 @@
 import cron, { ScheduledTask } from 'node-cron';
+import { logger } from '../utils/logger';
 import { prisma } from '../config/database';
 import { withAdvisoryLock, LOCK_KEYS } from '../utils/advisoryLock';
 import { generateDefaultSlots } from '../services/slot.service';
@@ -15,7 +16,7 @@ export function startSlotGenerationJob(): ScheduledTask {
   const task = cron.schedule('0 0 * * *', async () => {
     try {
       const ran = await withAdvisoryLock(LOCK_KEYS.slotGeneration, async () => {
-        console.log('[Cron] Generating slots for next 7 days...');
+        logger.info('[Cron] Generating slots for next 7 days...');
         const canteens = await prisma.canteen.findMany({
           where: { isActive: true },
           select: { id: true },
@@ -27,14 +28,14 @@ export function startSlotGenerationJob(): ScheduledTask {
           }
         }
 
-        console.log(`[Cron] Slots generated for ${canteens.length} canteens`);
+        logger.info(`[Cron] Slots generated for ${canteens.length} canteens`);
       });
-      if (!ran) console.log('[Cron] Slot generation skipped: another instance holds the lock');
+      if (!ran) logger.info('[Cron] Slot generation skipped: another instance holds the lock');
     } catch (err: any) {
-      console.error('[Cron] Slot generation failed:', err.message);
+      logger.error('[Cron] Slot generation failed', { error: err.message });
     }
   }, { timezone: 'Asia/Kolkata' });
 
-  console.log('[Cron] Slot generation job scheduled (daily at midnight IST)');
+  logger.info('[Cron] Slot generation job scheduled (daily at midnight IST)');
   return task;
 }

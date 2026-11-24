@@ -27,7 +27,6 @@ export default function LoginPage() {
       const token = await credential.user.getIdToken();
 
       localStorage.setItem('auth_token', token);
-      api.defaults.headers.common['Authorization'] = `Bearer ${token}`;
 
       let userData;
       try {

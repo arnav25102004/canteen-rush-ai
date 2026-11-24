@@ -43,7 +43,7 @@ export default function ScannerPage() {
     try {
       const parts = token.split('.');
       if (parts.length !== 3) throw new Error('Invalid QR format');
-      const payload = JSON.parse(atob(parts[1]));
+      const payload = JSON.parse(atob(parts[1].replace(/-/g, '+').replace(/_/g, '/')));
       if (!payload.orderId) throw new Error('No orderId in QR');
       const { data } = await api.post(`/orders/vendor/${payload.orderId}/scan`, { qrToken: token });
       setResult({ success: true, order: data.order });

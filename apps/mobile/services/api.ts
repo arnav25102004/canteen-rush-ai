@@ -63,11 +63,11 @@ api.interceptors.response.use(
       return Promise.reject(error);
     }
 
-    // Cold-start timeout / 503: retry once, only for idempotent requests so a
-    // timed-out POST can never create a duplicate order.
+    // Cold-start timeout / 503: retry once, only for idempotent requests. Placing an
+    // order qualifies because checkout sends a clientRequestId the server de-duplicates on.
     const method = (config.method ?? 'get').toLowerCase();
     if (
-      IDEMPOTENT.includes(method) &&
+      (IDEMPOTENT.includes(method) || (method === 'post' && config.url === '/orders')) &&
       !config._netRetried &&
       (error.code === 'ECONNABORTED' || status === 503)
     ) {

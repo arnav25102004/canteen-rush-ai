@@ -4,6 +4,8 @@ import { deleteFirebaseUser } from '../config/firebase';
 import { AuthRequest } from '../middleware/auth';
 import { logger } from '../utils/logger';
 import { anonymiseUserFeedback } from '../services/feedback.service';
+import { invalidateAuthUser } from '../services/authUser.service';
+import { disconnectUser } from '../socket/orderSocket';
 
 // DPDPA-style deletion: anonymise rather than hard-delete. Orders reference
 // this user for vendor settlement/dispute records, so the row must survive —
@@ -60,6 +62,9 @@ export async function deleteAccount(req: AuthRequest, res: Response) {
         },
       });
     });
+
+    await invalidateAuthUser(firebaseUid);
+    disconnectUser(req.io, userId);
 
     // Delete from Firebase Auth after DB anonymisation succeeds
     try {

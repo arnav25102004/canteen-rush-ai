@@ -31,5 +31,8 @@ npx prisma migrate dev      # new migration after editing schema.prisma
 - **Vendor endpoints**: scope every query to the vendor's canteen with `canteenScope(req)` from `middleware/auth.ts`.
 - **Routers**: import `Router` from `utils/router`, not from `express`. It forwards async errors to the error handler (Express 4 would otherwise crash the process).
 - **Money and state changes**: use conditional `updateMany` (checking the expected status or balance) inside `prisma.$transaction`, not read-then-write.
-- **Redis**: optional. Use `cacheGet`, `cacheSet` and `cacheDel` from `config/redis.ts`; they never throw.
+- **Redis**: optional. Read through `cached` from `config/cache.ts`, which falls back to memory and the DB when Redis is unavailable.
 - **Time**: slot dates are calendar dates, and times are IST. Use `slotStartsAt` and `istDateKey` from `utils/helpers.ts`.
+- **Read caching**: use `cached` from `config/cache.ts` (in-process plus Redis, serves stale data if the DB is down). After a DB commit that changes cached data, call `refreshMenu`, `refreshCanteen`, `invalidateSlots` or `invalidateAuthUser*`. Never use cached data to validate price, stock or capacity; orders read those from the DB.
+- **Slow side effects**: write them with `enqueue` from `services/outbox.service.ts` inside the transaction. The worker delivers them at least once, so handlers must tolerate repeats.
+- **Processes**: `PROCESS_ROLE` is `all` (default), `api` or `worker`. Run one or more `worker` processes when running several `api` instances. Behind a CDN, set `TRUST_PROXY_HOPS=2`.

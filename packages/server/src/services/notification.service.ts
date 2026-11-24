@@ -29,31 +29,37 @@ const ORDER_STATUS_MESSAGES: Partial<Record<OrderStatus, { title: string; body: 
   },
 };
 
-export async function sendOrderNotification(
-  userId: string,
-  orderId: string,
-  orderNumber: string,
-  status: OrderStatus
-) {
+export interface OrderNotificationEvent {
+  userId: string;
+  orderId: string;
+  orderNumber: string;
+  status: OrderStatus;
+}
+
+/** Run by the outbox worker. Throws on a DB failure so the event is retried. */
+export async function deliverOrderNotification({ userId, orderId, orderNumber, status }: OrderNotificationEvent) {
   const msg = ORDER_STATUS_MESSAGES[status];
   if (!msg) return;
 
   const user = await prisma.user.findUnique({
     where: { id: userId },
-    select: { fcmToken: true },
+    select: { fcmToken: true, isDeleted: true },
   });
+  if (!user || user.isDeleted) return;
+
+  // Delivery is at-least-once: a retried event must not add a second inbox row or push.
+  const data = { orderId, status };
+  const delivered = await prisma.notification.findFirst({
+    where: { userId, type: 'order_update', data: { equals: data } },
+    select: { id: true },
+  });
+  if (delivered) return;
 
   await prisma.notification.create({
-    data: {
-      userId,
-      title: msg.title,
-      body: msg.body(orderNumber),
-      type: 'order_update',
-      data: { orderId, status },
-    },
+    data: { userId, title: msg.title, body: msg.body(orderNumber), type: 'order_update', data },
   });
 
-  if (user?.fcmToken) {
+  if (user.fcmToken) {
     await sendPushNotification(user.fcmToken, msg.title, msg.body(orderNumber), {
       orderId,
       status,

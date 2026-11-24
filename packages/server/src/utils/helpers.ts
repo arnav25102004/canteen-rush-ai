@@ -98,8 +98,9 @@ export function emitOrderUpdate(
   payload: Record<string, unknown>
 ) {
   if (!io) return;
-  io.to(`order:${orderId}`).emit('order:status_update', payload);
-  io.to(`canteen:${canteenId}`).emit('order:status_update', { orderId, ...payload });
+  const update = { orderId, ...payload };
+  io.to(`order:${orderId}`).emit('order:status_update', update);
+  io.to(`canteen:${canteenId}`).emit('order:status_update', update);
 }
 
 export function generateTimeSlots(

@@ -4,7 +4,7 @@ import Sidebar from '../../../components/shared/Sidebar';
 import api from '../../../lib/api';
 import { auth } from '../../../lib/firebase';
 import axios from 'axios';
-import { io, Socket } from 'socket.io-client';
+import { io } from 'socket.io-client';
 
 interface OrderItem { quantity: number; menuItem: { name: string } }
 interface Order {
@@ -24,7 +24,7 @@ interface Stats { totalOrders: number; totalRevenue: number; avgPrepTimeMinutes:
 
 // What the single action button does per status
 const ACTION: Record<string, { label: string; next: string; color: string }> = {
-  CONFIRMED: { label: 'Accept & Start', next: 'PREPARING', color: '#f59e0b' },
+  CONFIRMED: { label: 'Accept Order',   next: 'ACCEPTED',  color: '#3b82f6' },
   ACCEPTED:  { label: 'Mark Preparing', next: 'PREPARING', color: '#f59e0b' },
   PREPARING: { label: '✓ Ready for Pickup', next: 'READY',    color: '#10b981' },
 };
@@ -48,7 +48,7 @@ function timeAgo(iso: string) {
 export default function VendorDashboard() {
   const [stats, setStats] = useState<Stats | null>(null);
   const [orders, setOrders] = useState<Order[]>([]);
-  const [socket, setSocket] = useState<Socket | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
   const [loadError, setLoadError] = useState('');
   const loadingRef = useRef(false);
 
@@ -58,10 +58,10 @@ export default function VendorDashboard() {
     try {
       const [statsRes, ordersRes] = await Promise.all([
         api.get('/analytics/vendor/summary?period=today'),
-        api.get('/orders/vendor/list'),
+        api.get('/orders/vendor/list?active=true&limit=100'),
       ]);
       if (statsRes.data) setStats(statsRes.data);
-      if (ordersRes.data.orders) setOrders(ordersRes.data.orders.slice(0, 40));
+      if (ordersRes.data.orders) setOrders(ordersRes.data.orders);
       setLoadError('');
     } catch (e) {
       const msg = axios.isAxiosError(e) ? (e.response?.data as { error?: unknown } | undefined)?.error : undefined;
@@ -94,7 +94,8 @@ export default function VendorDashboard() {
         transports: ['websocket', 'polling'],
         reconnection: true,
         reconnectionDelay: 1000,
-        reconnectionAttempts: 10,
+        reconnectionDelayMax: 10000,
+        reconnectionAttempts: Infinity, // a kitchen screen stays open all day and must recover from any outage
         // Fetched per (re)connect: the server rejects unauthenticated handshakes
         // and only lets the assigned vendor join this canteen's room.
         // Same token source as lib/api.ts: live Firebase user first, stored token as fallback.
@@ -113,7 +114,6 @@ export default function VendorDashboard() {
       sock.on('connect', onConnect);
       sock.on('order:new', onOrderEvent);
       sock.on('order:status_update', onOrderEvent);
-      setSocket(sock);
     })();
     return () => {
       cancelled = true;
@@ -126,9 +126,18 @@ export default function VendorDashboard() {
   }, [loadData]);
 
   async function markStatus(orderId: string, next: string) {
-    await api.patch(`/orders/vendor/${orderId}/status`, { status: next });
-    // Optimistic update
-    setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: next } : o));
+    setBusyId(orderId);
+    try {
+      await api.patch(`/orders/vendor/${orderId}/status`, { status: next });
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, status: next } : o));
+      setLoadError('');
+    } catch (e) {
+      const msg = axios.isAxiosError(e) ? (e.response?.data as { error?: unknown } | undefined)?.error : undefined;
+      setLoadError(typeof msg === 'string' ? msg : 'Could not update the order. Please try again.');
+      loadData();
+    } finally {
+      setBusyId(null);
+    }
   }
 
   // Group by status for column layout
@@ -265,7 +274,9 @@ export default function VendorDashboard() {
                   {action && (
                     <button
                       onClick={() => markStatus(order.id, action.next)}
+                      disabled={busyId === order.id}
                       style={{
+                        opacity: busyId === order.id ? 0.6 : 1,
                         background: action.color,
                         color: '#fff',
                         border: 'none',

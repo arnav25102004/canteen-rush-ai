@@ -2,13 +2,14 @@ import { Response } from 'express';
 import { prisma } from '../config/database';
 import { AuthRequest } from '../middleware/auth';
 import { placeOrder, cancelOrder, assertNotStrikeBanned, findRecentOrdersForUser } from '../services/order.service';
-import { awardPointsForOrder } from '../services/loyalty.service';
 import { verifyQRToken, generateQRCodeDataURL } from '../services/qr.service';
-import { sendOrderNotification } from '../services/notification.service';
+import { enqueue } from '../services/outbox.service';
+import { cached } from '../config/cache';
+import { invalidateOrderViews, lastOrderKey, orderViewKey } from '../services/catalogCache.service';
 import { parsePagination, buildDateRange, emitOrderUpdate, validateBody } from '../utils/helpers';
 import { computeNudgeAt } from '../utils/feedbackNudge';
 import { z } from 'zod';
-import { OrderStatus, UserRole } from '@prisma/client';
+import { OrderStatus, Prisma, UserRole } from '@prisma/client';
 
 const placeOrderSchema = z.object({
   canteenId: z.string().uuid(),
@@ -21,6 +22,7 @@ const placeOrderSchema = z.object({
   })).min(1).max(30),
   specialInstructions: z.string().max(500).optional(),
   pointsToRedeem: z.number().int().min(0).optional().default(0),
+  clientRequestId: z.string().uuid().optional(),
 });
 
 // CANCELLED is not here: cancelling goes through cancelOrder() so the slot,
@@ -50,8 +52,12 @@ export async function createOrder(req: AuthRequest, res: Response) {
 }
 
 export async function getLastOrder(req: AuthRequest, res: Response) {
-  const [order = null] = await findRecentOrdersForUser(req.user!.id, 1);
-  return res.json({ order });
+  const userId = req.user!.id;
+  const body = await cached(lastOrderKey(userId), async () => {
+    const [order = null] = await findRecentOrdersForUser(userId, 1);
+    return { order };
+  }, { ttl: 5, stale: 0, local: true });
+  return res.setHeader('Cache-Control', 'private, no-store').json(body);
 }
 
 export async function getMyOrders(req: AuthRequest, res: Response) {
@@ -60,6 +66,25 @@ export async function getMyOrders(req: AuthRequest, res: Response) {
   const userId = req.user!.id;
 
   const where = { userId, ...(status ? { status: status as OrderStatus } : {}) };
+  const include = {
+    canteen: { select: { id: true, name: true, imageUrl: true } },
+    slot: { select: { startTime: true, endTime: true, date: true } },
+    items: { include: { menuItem: { select: { name: true, imageUrl: true } } } },
+  };
+
+  // ?cursor= (empty for the first page) skips the COUNT and stays fast on long histories.
+  if (typeof req.query.cursor === 'string') {
+    const cursor = req.query.cursor;
+    const rows = await prisma.order.findMany({
+      where,
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: l + 1,
+      ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      include,
+    });
+    const orders = rows.slice(0, l);
+    return res.json({ orders, nextCursor: rows.length > l ? orders.at(-1)!.id : null, limit: l });
+  }
 
   const [orders, total] = await Promise.all([
     prisma.order.findMany({
@@ -67,11 +92,7 @@ export async function getMyOrders(req: AuthRequest, res: Response) {
       orderBy: { createdAt: 'desc' },
       skip,
       take,
-      include: {
-        canteen: { select: { id: true, name: true, imageUrl: true } },
-        slot: { select: { startTime: true, endTime: true, date: true } },
-        items: { include: { menuItem: { select: { name: true, imageUrl: true } } } },
-      },
+      include,
     }),
     prisma.order.count({ where }),
   ]);
@@ -81,24 +102,31 @@ export async function getMyOrders(req: AuthRequest, res: Response) {
 
 export async function getOrder(req: AuthRequest, res: Response) {
   const { id } = req.params;
-  const order = await prisma.order.findUnique({
-    where: { id },
-    include: {
-      canteen: { select: { id: true, name: true, imageUrl: true, location: true, vendorUpiId: true, vendorUpiName: true } },
-      slot: true,
-      items: { include: { menuItem: { select: { name: true, imageUrl: true, price: true } } } },
-      ratings: true,
-    },
-  });
+  // The QR token is a pickup credential: it stays out of this cached view and comes only from /qr.
+  const body = await cached(orderViewKey(id), async () => {
+    const row = await prisma.order.findUnique({
+      where: { id },
+      include: {
+        canteen: { select: { id: true, name: true, imageUrl: true, location: true, vendorUpiId: true, vendorUpiName: true } },
+        slot: true,
+        items: { include: { menuItem: { select: { name: true, imageUrl: true, price: true } } } },
+        ratings: true,
+      },
+    });
+    if (!row) return null;
+    const { qrCode: _qrCode, ...order } = row;
+    // `rating` (first rating) stays for older app versions for one release; new clients use `ratings`.
+    return { order: { ...order, rating: order.ratings[0] ?? null } };
+  }, { ttl: 3, stale: 0, local: true, cacheIf: (v) => !!v });
 
-  if (!order) return res.status(404).json({ error: 'Order not found' });
+  if (!body) return res.status(404).json({ error: 'Order not found' });
+  const { order } = body;
   const isOwner = order.userId === req.user!.id;
   const isAdmin = req.user!.role === UserRole.ADMIN;
   const isThisCanteensVendor = req.user!.role === UserRole.VENDOR && order.canteen.id === req.user!.canteenId;
   if (!isOwner && !isAdmin && !isThisCanteensVendor) return res.status(403).json({ error: 'Forbidden' });
 
-  // `rating` (first rating) stays for older app versions for one release; new clients use `ratings`.
-  return res.json({ order: { ...order, rating: order.ratings[0] ?? null } });
+  return res.setHeader('Cache-Control', 'private, no-store').json(body);
 }
 
 export async function getOrderQR(req: AuthRequest, res: Response) {
@@ -132,25 +160,40 @@ export async function getVendorOrders(req: AuthRequest, res: Response) {
   const canteenId = req.user!.canteenId;
   if (!canteenId) return res.status(403).json({ error: 'No canteen assigned' });
 
-  const { date, slotId, status } = req.query as Record<string, string>;
+  const { date, slotId, status, active } = req.query as Record<string, string>;
   const { skip, take } = parsePagination(req.query.page as string, req.query.limit as string || '50');
-  const createdAt = buildDateRange(date);
+  const include = {
+    user: { select: { name: true, phone: true } },
+    slot: { select: { startTime: true, endTime: true } },
+    items: { include: { menuItem: { select: { name: true } } } },
+  };
+  const orderBy = [{ createdAt: 'asc' as const }, { id: 'asc' as const }];
+
+  if (active === 'true') {
+    // Everything the kitchen still has to act on, whichever day it was placed. The statuses
+    // are SQL literals because Postgres cannot match bound parameters to the partial index.
+    const rows = await prisma.$queryRaw<Array<{ id: string }>>(Prisma.sql`
+      SELECT id FROM orders
+      WHERE canteen_id = ${canteenId}
+        AND status IN ('PENDING', 'CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY')
+        ${slotId ? Prisma.sql`AND slot_id = ${slotId}` : Prisma.empty}
+      ORDER BY created_at, id
+      LIMIT ${take} OFFSET ${skip}`);
+    const orders = await prisma.order.findMany({ where: { id: { in: rows.map((r) => r.id) } }, orderBy, include });
+    return res.json({ orders });
+  }
 
   const orders = await prisma.order.findMany({
     where: {
       canteenId,
-      createdAt,
+      createdAt: buildDateRange(date),
       ...(slotId ? { slotId } : {}),
       ...(status ? { status: status as OrderStatus } : { status: { notIn: [OrderStatus.CANCELLED] } }),
     },
-    orderBy: { createdAt: 'asc' },
+    orderBy,
     skip,
     take,
-    include: {
-      user: { select: { name: true, phone: true } },
-      slot: { select: { startTime: true, endTime: true } },
-      items: { include: { menuItem: { select: { name: true } } } },
-    },
+    include,
   });
 
   return res.json({ orders });
@@ -178,15 +221,25 @@ export async function updateOrderStatus(req: AuthRequest, res: Response) {
   }
 
   // Conditional on the status we validated against, so two clicks can't race.
-  const { count } = await prisma.order.updateMany({
-    where: { id, status: order.status },
-    data: { status, ...(status === OrderStatus.READY ? { actualReadyAt: new Date() } : {}) },
+  const changed = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({
+      where: { id, status: order.status },
+      data: { status, ...(status === OrderStatus.READY ? { actualReadyAt: new Date() } : {}) },
+    });
+    if (count === 0) return false;
+    if (order.userId) {
+      await enqueue(tx, {
+        type: 'notification.order',
+        payload: { userId: order.userId, orderId: id, orderNumber: order.orderNumber, status: status as OrderStatus },
+      });
+    }
+    return true;
   });
-  if (count === 0) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+  if (!changed) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+  await invalidateOrderViews(id, order.userId);
   const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status, estimatedReadyAt: updated.estimatedReadyAt });
-  if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, status as OrderStatus);
 
   return res.json({ order: updated });
 }
@@ -204,7 +257,7 @@ export async function scanQR(req: AuthRequest, res: Response) {
 
   const order = await prisma.order.findUnique({
     where: { id },
-    select: { status: true, qrScanned: true, canteenId: true, paymentMethod: true },
+    select: { status: true, qrScanned: true, canteenId: true, paymentMethod: true, userId: true },
   });
   if (!order) return res.status(404).json({ error: 'Order not found' });
   if (order.status !== OrderStatus.READY) return res.status(400).json({ error: 'Order is not ready yet' });
@@ -213,23 +266,26 @@ export async function scanQR(req: AuthRequest, res: Response) {
   // Atomic hand-over: a QR can only be redeemed once even if scanned twice at once.
   // Cash orders are paid at this moment, at the counter.
   const pickedUpAt = new Date();
-  const { count } = await prisma.order.updateMany({
-    where: { id, status: OrderStatus.READY, qrScanned: false },
-    data: {
-      status: OrderStatus.PICKED_UP,
-      qrScanned: true,
-      pickedUpAt,
-      feedbackNudgeAt: computeNudgeAt(pickedUpAt),
-      ...(order.paymentMethod === 'CASH' ? { paymentStatus: 'PAID' as const, paymentVerifiedAt: new Date() } : {}),
-    },
+  const collected = await prisma.$transaction(async (tx) => {
+    const { count } = await tx.order.updateMany({
+      where: { id, status: OrderStatus.READY, qrScanned: false },
+      data: {
+        status: OrderStatus.PICKED_UP,
+        qrScanned: true,
+        pickedUpAt,
+        feedbackNudgeAt: computeNudgeAt(pickedUpAt),
+        ...(order.paymentMethod === 'CASH' ? { paymentStatus: 'PAID' as const, paymentVerifiedAt: new Date() } : {}),
+      },
+    });
+    if (count === 0) return false;
+    await enqueue(tx, { type: 'loyalty.award', payload: { orderId: id } });
+    return true;
   });
-  if (count === 0) return res.status(400).json({ error: 'Already collected' });
+  if (!collected) return res.status(400).json({ error: 'Already collected' });
+  await invalidateOrderViews(id, order.userId);
   const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
 
   emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.PICKED_UP });
-
-  // Award loyalty points now that order is PICKED_UP
-  awardPointsForOrder(id).catch((err) => console.error('[Loyalty] Failed to award points:', err));
 
   return res.json({ success: true, order: updated });
 }
@@ -253,14 +309,24 @@ export async function respondToOrder(req: AuthRequest, res: Response) {
   }
 
   if (action === 'ACCEPT') {
-    const { count } = await prisma.order.updateMany({
-      where: { id, status: OrderStatus.CONFIRMED },
-      data: { status: OrderStatus.ACCEPTED },
+    const accepted = await prisma.$transaction(async (tx) => {
+      const { count } = await tx.order.updateMany({
+        where: { id, status: OrderStatus.CONFIRMED },
+        data: { status: OrderStatus.ACCEPTED },
+      });
+      if (count === 0) return false;
+      if (order.userId) {
+        await enqueue(tx, {
+          type: 'notification.order',
+          payload: { userId: order.userId, orderId: id, orderNumber: order.orderNumber, status: OrderStatus.ACCEPTED },
+        });
+      }
+      return true;
     });
-    if (count === 0) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+    if (!accepted) return res.status(409).json({ error: 'Order changed, refresh and try again' });
+    await invalidateOrderViews(id, order.userId);
     const updated = await prisma.order.findUniqueOrThrow({ where: { id } });
     emitOrderUpdate(req.io, id, order.canteenId, { status: OrderStatus.ACCEPTED });
-    if (order.userId) await sendOrderNotification(order.userId, id, order.orderNumber, OrderStatus.ACCEPTED);
     return res.json({ order: updated });
   }
 
@@ -273,29 +339,27 @@ export async function getPrepSheet(req: AuthRequest, res: Response) {
   if (!canteenId) return res.status(403).json({ error: 'No canteen assigned' });
 
   const { date, slotId } = req.query as Record<string, string>;
-  const createdAt = buildDateRange(date);
+  const { gte, lte } = buildDateRange(date);
 
-  const orderItems = await prisma.orderItem.findMany({
-    where: {
-      order: {
-        canteenId,
-        status: { notIn: [OrderStatus.CANCELLED, OrderStatus.PICKED_UP] },
-        ...(slotId ? { slotId } : { createdAt }),
-      },
-    },
-    include: {
-      menuItem: { select: { name: true } },
-      order: { include: { slot: { select: { startTime: true, endTime: true } } } },
-    },
-  });
+  // One aggregate over open orders only. Unpaid and uncollected orders are not food to make.
+  const rows = await prisma.$queryRaw<Array<{ menuItemId: string; name: string; startTime: string | null; endTime: string | null; quantity: number }>>(Prisma.sql`
+    SELECT oi.menu_item_id AS "menuItemId", mi.name, ps.start_time AS "startTime", ps.end_time AS "endTime",
+           SUM(oi.quantity)::int AS quantity
+    FROM orders o
+    JOIN order_items oi ON oi.order_id = o.id
+    JOIN menu_items mi ON mi.id = oi.menu_item_id
+    LEFT JOIN pickup_slots ps ON ps.id = o.slot_id
+    WHERE o.canteen_id = ${canteenId}
+      AND o.status IN ('CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY')
+      AND ${slotId ? Prisma.sql`o.slot_id = ${slotId}` : Prisma.sql`o.created_at >= ${gte} AND o.created_at <= ${lte}`}
+    GROUP BY 1, 2, 3, 4`);
 
   const aggregated: Record<string, { name: string; quantity: number; slots: Record<string, number> }> = {};
-  for (const oi of orderItems) {
-    const key = oi.menuItemId;
-    const slotLabel = oi.order.slot ? `${oi.order.slot.startTime}-${oi.order.slot.endTime}` : 'Walk-in';
-    if (!aggregated[key]) aggregated[key] = { name: oi.menuItem.name, quantity: 0, slots: {} };
-    aggregated[key].quantity += oi.quantity;
-    aggregated[key].slots[slotLabel] = (aggregated[key].slots[slotLabel] || 0) + oi.quantity;
+  for (const row of rows) {
+    const slotLabel = row.startTime ? `${row.startTime}-${row.endTime}` : 'Walk-in';
+    aggregated[row.menuItemId] ??= { name: row.name, quantity: 0, slots: {} };
+    aggregated[row.menuItemId].quantity += row.quantity;
+    aggregated[row.menuItemId].slots[slotLabel] = (aggregated[row.menuItemId].slots[slotLabel] || 0) + row.quantity;
   }
 
   return res.json({ prepSheet: Object.values(aggregated) });

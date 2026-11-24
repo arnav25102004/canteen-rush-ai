@@ -5,23 +5,25 @@ import api from '../../../lib/api';
 
 export default function CanteensPage() {
   const [canteens, setCanteens] = useState<any[]>([]);
-  const [vendors, setVendors] = useState<any[]>([]);
+  const [error, setError] = useState('');
 
   useEffect(() => {
-    Promise.all([
-      api.get('/canteens?includeInactive=true').then(r => setCanteens(r.data.canteens || [])),
-      api.get('/admin/vendors').then(r => setVendors(r.data.vendors || [])),
-    ]).catch(console.error);
+    api.get('/canteens?includeInactive=true')
+      .then(r => setCanteens(r.data.canteens || []))
+      .catch(() => setError('Could not load canteens.'));
   }, []);
 
   async function toggleActive(id: string, current: boolean) {
-    if (current) {
-      await api.delete(`/canteens/${id}`);
-    } else {
-      await api.put(`/canteens/${id}`, { isActive: true });
+    setError('');
+    try {
+      if (current) await api.delete(`/canteens/${id}`);
+      else await api.put(`/canteens/${id}`, { isActive: true });
+      const { data } = await api.get('/canteens?includeInactive=true');
+      setCanteens(data.canteens || []);
+    } catch (e: any) {
+      const msg = e?.response?.data?.error;
+      setError(typeof msg === 'string' ? msg : 'Could not update the canteen.');
     }
-    const { data } = await api.get('/canteens?includeInactive=true');
-    setCanteens(data.canteens || []);
   }
 
   return (
@@ -29,6 +31,7 @@ export default function CanteensPage() {
       <Sidebar />
       <main className="flex-1 p-8 bg-gray-50">
         <h1 className="text-2xl font-bold text-gray-800 mb-6">Canteen Management</h1>
+        {error && <p className="mb-4 text-sm text-red-600">{error}</p>}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {canteens.map((c) => (
             <div key={c.id} className="bg-white rounded-xl shadow-sm p-6">

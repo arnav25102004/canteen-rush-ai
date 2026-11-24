@@ -12,7 +12,18 @@ const PRISMA_STATUS: Record<string, [number, string]> = {
   P2023: [400, 'Invalid id'],
 };
 
-export function globalErrorHandler(err: any, req: Request, res: Response, _next: NextFunction) {
+// Pool exhausted / transaction could not start: the request is safe to retry.
+const PRISMA_BUSY = new Set(['P2024', 'P2028', 'P2034']);
+
+export function globalErrorHandler(err: any, req: Request, res: Response, next: NextFunction) {
+  // Already answered (e.g. the request deadline fired): let Express close the connection.
+  if (res.headersSent) return next(err);
+
+  if (err instanceof Prisma.PrismaClientKnownRequestError && PRISMA_BUSY.has(err.code)) {
+    logger.warn('Database busy', { path: req.path, code: err.code });
+    res.setHeader('Retry-After', '2');
+    return res.status(503).json({ error: 'Server is busy. Please retry shortly.', code: 'OVERLOADED' });
+  }
   if (err instanceof Prisma.PrismaClientKnownRequestError && PRISMA_STATUS[err.code]) {
     const [status, error] = PRISMA_STATUS[err.code];
     return res.status(status).json({ error });

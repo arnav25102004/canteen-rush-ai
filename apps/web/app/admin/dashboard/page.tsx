@@ -38,7 +38,7 @@ export default function AdminDashboard() {
                   <p className="font-medium">{c.name}</p>
                   <p className="text-sm text-gray-500">{c.campus}</p>
                 </div>
-                <span className="text-sm font-semibold text-gray-700">{c._count.orders} orders today</span>
+                <span className="text-sm font-semibold text-gray-700">{c._count.orders} orders (24h)</span>
               </div>
             ))}
           </div>

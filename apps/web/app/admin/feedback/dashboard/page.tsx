@@ -98,7 +98,7 @@ export default function FeedbackDashboardPage() {
                       <CartesianGrid strokeDasharray="3 3" stroke="#eee" />
                       <XAxis dataKey="label" fontSize={12} />
                       <YAxis domain={[1, 5]} fontSize={12} />
-                      <Tooltip formatter={(v: any, n: any, p: any) => [`${v} (${p.payload.count} ratings)`, 'Average']} />
+                      <Tooltip formatter={(v: any, _n: any, p: any) => [`${v} (${p.payload.count} ratings)`, 'Average']} />
                       <Line type="monotone" dataKey="avg" stroke="#e94560" strokeWidth={2} dot={trend.length < 40} />
                     </LineChart>
                   </ResponsiveContainer>

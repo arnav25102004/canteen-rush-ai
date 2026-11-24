@@ -12,6 +12,7 @@ interface Order {
   slot: { startTime: string; endTime: string } | null;
 }
 
+const PAGE_SIZE = 100;
 const STATUSES = ['CONFIRMED', 'ACCEPTED', 'PREPARING', 'READY', 'PICKED_UP', 'NO_SHOW'];
 const statusColors: Record<string, string> = {
   CONFIRMED: 'border-yellow-400 bg-yellow-50',
@@ -38,10 +39,17 @@ export default function OrdersPage() {
   const load = useCallback(async () => {
     setError('');
     try {
-      const params = new URLSearchParams({ date });
+      const params = new URLSearchParams({ date, limit: String(PAGE_SIZE) });
       if (selectedStatus) params.set('status', selectedStatus);
-      const { data } = await api.get(`/orders/vendor/list?${params}`);
-      setOrders(data.orders || []);
+      const all: Order[] = [];
+      for (let page = 1; ; page++) {
+        params.set('page', String(page));
+        const { data } = await api.get(`/orders/vendor/list?${params}`);
+        const rows: Order[] = data.orders || [];
+        all.push(...rows);
+        if (rows.length < PAGE_SIZE) break;
+      }
+      setOrders(all);
     } catch (e: any) {
       setError(e?.response?.data?.error || e.message || 'Failed to load orders');
     }
@@ -50,16 +58,22 @@ export default function OrdersPage() {
   useEffect(() => { load(); }, [load]);
 
   async function updateStatus(id: string, status: string) {
-    await api.patch(`/orders/vendor/${id}/status`, { status });
+    try {
+      await api.patch(`/orders/vendor/${id}/status`, { status });
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Could not update the order.');
+    }
     load();
   }
 
   async function respond(id: string, action: 'ACCEPT' | 'REJECT') {
-    if (action === 'REJECT') {
-      const reason = window.prompt('Reason for rejection (optional):') ?? '';
-      await api.patch(`/orders/vendor/${id}/respond`, { action: 'REJECT', rejectReason: reason });
-    } else {
-      await api.patch(`/orders/vendor/${id}/respond`, { action: 'ACCEPT' });
+    // Cancel in the prompt returns null and must leave the order untouched.
+    const reason = action === 'REJECT' ? window.prompt('Reason for rejection (optional):') : '';
+    if (reason === null) return;
+    try {
+      await api.patch(`/orders/vendor/${id}/respond`, action === 'REJECT' ? { action, rejectReason: reason } : { action });
+    } catch (e: any) {
+      setError(e?.response?.data?.error || 'Could not update the order.');
     }
     load();
   }

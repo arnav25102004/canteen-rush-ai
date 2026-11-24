@@ -35,7 +35,7 @@ export async function markAllRead(req: AuthRequest, res: Response) {
   return res.json({ success: true });
 }
 
-export async function getAnnouncements(req: AuthRequest, res: Response) {
+export async function getAnnouncements(_req: AuthRequest, res: Response) {
   const now = new Date();
   const announcements = await prisma.announcement.findMany({
     where: {
